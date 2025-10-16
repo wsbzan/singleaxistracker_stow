@@ -6,66 +6,75 @@ import matplotlib.pyplot as plt
 # Metadata for site and system (edit for your location/system)
 latitude, longitude = 39.74, -104.985 # Denver, CO example
 tz = 'MST'
-system_capacity = 4700 # kW (for 4.7 MW system)
-tilt, azimuth = 0, 180 # Initial orientation
-
-# Create time range for modeling (one day example)
+altitude = 1000
+location = pvlib.location.Location(
+    latitude=latitude,
+    longitude=longitude,
+    tz=tz,
+    altitude=altitude,
+    name="Example Site"
+)
+# Create time range
 times = pd.date_range('2025-06-21', '2025-06-22', freq='1h', tz=tz)
-
-# Solar position and tracking
-solpos = pvlib.solarposition.get_solarposition(times, latitude, longitude)
-tracking = pvlib.tracking.singleaxis(
-    apparent_zenith=solpos['apparent_zenith'],
-    apparent_azimuth=solpos['azimuth'],
-    axis_tilt=0, axis_azimuth=90, max_angle=60, backtrack=True, 
-    gcr=0.3
-)
-
-# Weather data stub (replace with measured data)
-dni = 800  # Direct Normal Irradiance W/m2
-ghi = 500  # Global Horizontal Irradiance W/m2
-dhi = 100  # Diffuse Horizontal Irradiance W/m2
-
-weather = pd.DataFrame({
-    'dni': dni, 'ghi': ghi, 'dhi': dhi
-}, index=times)
-
-# Surface irradiance with tracker rotation
-poa_irradiance = pvlib.irradiance.get_total_irradiance(
-    surface_tilt=tracking['tilt'], 
-    surface_azimuth=tracking['azimuth'], 
-    solar_zenith=solpos['apparent_zenith'],
-    solar_azimuth=solpos['azimuth'],
-    dni=weather['dni'],
-    ghi=weather['ghi'],
-    dhi=weather['dhi']
-)
-
+# System Parameters
+axis_tilt = 0
+axis_azimuth = 0
+max_angle = 60
+backtrack = True
+modules_per_string = 20
+strings_per_inverter = 1
+# Temperature model
+temp_params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_polymer']
 # PV module and inverter models (use realistic specs)
 sandia_modules = pvlib.pvsystem.retrieve_sam('SandiaMod')
 module = sandia_modules['Canadian_Solar_CS5P_220M___2009_']
 cec_inverters = pvlib.pvsystem.retrieve_sam('CECInverter')
 inverter = cec_inverters['ABB__MICRO_0_25_I_OUTD_US_208__208V_']
-
-# Temperature model
-temp_cell = pvlib.temperature.sapm_cell(
-    poa_irradiance['poa_global'],
-    temp_air=25, wind_speed=1
+solar_position = location.get_solarposition(times)
+api_key = 'Qwu9Ny75sGchX3wCrjcgFX7PePxJSMOt0xUgTeXC'
+email = "wsbzan@gmail.com"
+keys = ['ghi','dni','dhi','temp_air','wind_speed','albedo','precipitable_water']
+psm3, psm3_metadata = pvlib.iotools.get_psm3(latitude, longitude, api_key,
+                                            email, interval = 15, names=2020,
+                                            map_variables=True, leap_day=True,
+                                            attributes=keys)
+print(psm3.head(5))
+# Mount
+mount = pvlib.pvsystem.SingleAxisTrackerMount(
+    axis_tilt=axis_tilt,
+    axis_azimuth=axis_azimuth,
+    max_angle=max_angle,
+    backtrack=backtrack
 )
-
-# PV system instance
+tracker_angles = mount.get_orientation(
+    solar_position['apparent_zenith'],
+    solar_position['azimuth']
+)
+print(tracker_angles.head(5))
+# Array
+array = pvlib.pvsystem.Array(
+    mount=mount,
+    module_parameters=module,
+    temperature_model_parameters = temp_params,
+    modules_per_string = modules_per_string,
+    strings = strings_per_inverter
+)
+# System
 system = pvlib.pvsystem.PVSystem(
-    surface_tilt=tilt, surface_azimuth=azimuth, 
-    module_parameters=module, inverter_parameters=inverter
+    arrays=[array], inverter_parameters=inverter
 )
-
-# DC output
-dc = system.sapm(poa_irradiance, temp_cell)
-
-# AC output
-ac = system.inverter(dc['v_mp'], dc['p_mp'])
+# Model Chain
+modelchain = pvlib.modelchain.ModelChain(
+    system,
+    location,
+    ac_model = 'sandia',
+    aoi_model='physical'
+)
+modelchain.run_model_from_effective_irradiance(data=data)
+ac = modelchain.results.ac / 1000
+dc = modelchain.results.dc['p_mp'] / 1000
 
 # Summarize results
-print('Total energy output (kWh):', ac.sum()/1000)
+print('Total energy output (kWh):', ac.sum())
 ac.plot(title='Hourly Energy Output (W)', ylabel='Power (W)')
 plt.show()
