@@ -15,21 +15,29 @@ location = pvlib.location.Location(
     name="Example Site"
 )
 # Create time range
-times = pd.date_range('2025-06-21', '2025-06-22', freq='1h', tz=tz)
+times = pd.date_range('2020-06-21', '2020-06-25', freq='1h', tz=tz)
 # System Parameters
 axis_tilt = 0
-axis_azimuth = 0
+axis_azimuth = 180
 max_angle = 60
 backtrack = True
-modules_per_string = 20
+modules_per_string = 200
 strings_per_inverter = 1
 # Temperature model
 temp_params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_polymer']
+gcr=0.001 #single row, gcr -> 0
+axis_height = 1 # meter
+pitch = 5 # m
+# default Faiman model parameters:
+temperature_model_parameters = dict(u0=25.0, u1=6.84)
+module_unit_mass = 12 / 0.72  # kg/m^2, taken from datasheet values
 # PV module and inverter models (use realistic specs)
-sandia_modules = pvlib.pvsystem.retrieve_sam('SandiaMod')
-module = sandia_modules['Canadian_Solar_CS5P_220M___2009_']
-cec_inverters = pvlib.pvsystem.retrieve_sam('CECInverter')
-inverter = cec_inverters['ABB__MICRO_0_25_I_OUTD_US_208__208V_']
+cec_module_db = pvlib.pvsystem.retrieve_sam('cecmod')
+module_parameters = cec_module_db['First_Solar__Inc__FS_4117_3']
+# ensure that correct spectral correction is applied
+module_parameters['Technology'] = 'CdTe'
+cec_inverter_db = pvlib.pvsystem.retrieve_sam('cecinverter')
+inverter_parameters = cec_inverter_db['TMEIC__PVL_L1833GRM']
 solar_position = location.get_solarposition(times)
 api_key = 'Qwu9Ny75sGchX3wCrjcgFX7PePxJSMOt0xUgTeXC'
 email = "wsbzan@gmail.com"
@@ -38,6 +46,7 @@ psm3, psm3_metadata = pvlib.iotools.get_psm3(latitude, longitude, api_key,
                                             email, interval = 15, names=2020,
                                             map_variables=True, leap_day=True,
                                             attributes=keys)
+psm3 = psm3.loc[times]
 print(psm3.head(5))
 # Mount
 mount = pvlib.pvsystem.SingleAxisTrackerMount(
@@ -48,20 +57,19 @@ mount = pvlib.pvsystem.SingleAxisTrackerMount(
 )
 tracker_angles = mount.get_orientation(
     solar_position['apparent_zenith'],
-    solar_position['azimuth']
-)
-print(tracker_angles.head(5))
+    solar_position['azimuth'])
+tracker_angles.to_csv("tracker_angles.csv",index=True)
 # Array
 array = pvlib.pvsystem.Array(
     mount=mount,
-    module_parameters=module,
-    temperature_model_parameters = temp_params,
+    module_parameters=module_parameters,
+    temperature_model_parameters = temperature_model_parameters,
     modules_per_string = modules_per_string,
     strings = strings_per_inverter
 )
 # System
 system = pvlib.pvsystem.PVSystem(
-    arrays=[array], inverter_parameters=inverter
+    arrays=[array], inverter_parameters=inverter_parameters
 )
 # Model Chain
 modelchain = pvlib.modelchain.ModelChain(
@@ -70,11 +78,41 @@ modelchain = pvlib.modelchain.ModelChain(
     ac_model = 'sandia',
     aoi_model='physical'
 )
-modelchain.run_model_from_effective_irradiance(data=data)
+# Copied from pvlib example
+dni_extra = pvlib.irradiance.get_extra_radiation(psm3.index)
+averaged_irradiance = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
+    tracker_angles['surface_tilt'], tracker_angles['surface_azimuth'],
+    solar_position['apparent_zenith'], solar_position['azimuth'],
+    gcr, axis_height, pitch,
+    psm3['ghi'], psm3['dhi'], psm3['dni'], psm3['albedo'],
+    model='haydavies', dni_extra=dni_extra,
+)
+cell_temperature_steady_state = pvlib.temperature.faiman(
+    poa_global=averaged_irradiance['poa_global'],
+    temp_air=psm3['temp_air'],
+    wind_speed=psm3['wind_speed'],
+    **temperature_model_parameters,
+)
+cell_temperature = pvlib.temperature.prilliman(
+    cell_temperature_steady_state,
+    psm3['wind_speed'],
+    unit_mass=module_unit_mass
+)
+weather_inputs = pd.DataFrame({
+    'poa_global': averaged_irradiance['poa_global'],
+    'poa_direct': averaged_irradiance['poa_direct'],
+    'poa_diffuse': averaged_irradiance['poa_diffuse'],
+    'cell_temperature': cell_temperature,
+    'precipitable_water': psm3['precipitable_water'],  # for the spectral model
+})
+
+modelchain.run_model_from_poa(weather_inputs)
 ac = modelchain.results.ac / 1000
 dc = modelchain.results.dc['p_mp'] / 1000
-
+weather_inputs.to_csv("weather_data.csv",index=True)
+ac.to_csv("ac.csv",index=True)
+dc.to_csv("dc.csv",index=True)
 # Summarize results
-print('Total energy output (kWh):', ac.sum())
-ac.plot(title='Hourly Energy Output (W)', ylabel='Power (W)')
+print('Total energy output DC (kWh):', dc.sum())
+dc.plot(title='Hourly Energy Output (W)', ylabel='Power (W)')
 plt.show()
