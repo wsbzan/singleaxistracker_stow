@@ -59,6 +59,18 @@ tracker_angles = mount.get_orientation(
     solar_position['apparent_zenith'],
     solar_position['azimuth'])
 tracker_angles.to_csv("tracker_angles.csv",index=True)
+tracker_angles_v2 = tracker_angles.copy()
+tracker_angles_v2['tracker_theta'].iloc[12:35]=-25
+# need to read and reference the paper behind this function
+surface = pvlib.tracking.calc_surface_orientation(tracker_angles_v2['tracker_theta'], axis_tilt, axis_azimuth)
+surface_tilt = surface['surface_tilt']
+surface_azimuth = surface['surface_azimuth']
+aoi = pvlib.irradiance.aoi(surface_tilt, surface_azimuth,
+                     solar_position['apparent_zenith'],
+                     solar_position['azimuth'])
+tracker_angles_v2['aoi'] = aoi
+tracker_angles_v2['surface_tilt'] = surface_tilt
+tracker_angles_v2['surface_azimuth'] = surface_azimuth
 # Array
 array = pvlib.pvsystem.Array(
     mount=mount,
@@ -98,6 +110,7 @@ cell_temperature = pvlib.temperature.prilliman(
     psm3['wind_speed'],
     unit_mass=module_unit_mass
 )
+
 weather_inputs = pd.DataFrame({
     'poa_global': averaged_irradiance['poa_global'],
     'poa_direct': averaged_irradiance['poa_direct'],
@@ -105,14 +118,47 @@ weather_inputs = pd.DataFrame({
     'cell_temperature': cell_temperature,
     'precipitable_water': psm3['precipitable_water'],  # for the spectral model
 })
-
 modelchain.run_model_from_poa(weather_inputs)
 ac = modelchain.results.ac / 1000
 dc = modelchain.results.dc['p_mp'] / 1000
 weather_inputs.to_csv("weather_data.csv",index=True)
 ac.to_csv("ac.csv",index=True)
 dc.to_csv("dc.csv",index=True)
+# adjusted angle
+averaged_irradiance_v2 = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
+    tracker_angles_v2['surface_tilt'], tracker_angles_v2['surface_azimuth'],
+    solar_position['apparent_zenith'], solar_position['azimuth'],
+    gcr, axis_height, pitch,
+    psm3['ghi'], psm3['dhi'], psm3['dni'], psm3['albedo'],
+    model='haydavies', dni_extra=dni_extra,
+)
+cell_temperature_steady_state_v2 = pvlib.temperature.faiman(
+    poa_global=averaged_irradiance_v2['poa_global'],
+    temp_air=psm3['temp_air'],
+    wind_speed=psm3['wind_speed'],
+    **temperature_model_parameters,
+)
+cell_temperature_v2 = pvlib.temperature.prilliman(
+    cell_temperature_steady_state_v2,
+    psm3['wind_speed'],
+    unit_mass=module_unit_mass
+)
+
+weather_inputs_v2 = pd.DataFrame({
+    'poa_global': averaged_irradiance_v2['poa_global'],
+    'poa_direct': averaged_irradiance_v2['poa_direct'],
+    'poa_diffuse': averaged_irradiance_v2['poa_diffuse'],
+    'cell_temperature': cell_temperature_v2,
+    'precipitable_water': psm3['precipitable_water'],  # for the spectral model
+})
+modelchain.run_model_from_poa(weather_inputs_v2)
+ac_v2 = modelchain.results.ac / 1000
+dc_v2 = modelchain.results.dc['p_mp'] / 1000
 # Summarize results
 print('Total energy output DC (kWh):', dc.sum())
 dc.plot(title='Hourly Energy Output (W)', ylabel='Power (W)')
+plt.show()
+# Summarize results
+print('Total energy output DC (kWh):', dc_v2.sum())
+dc_v2.plot(title='Hourly Energy Output (W)', ylabel='Power (W)')
 plt.show()
