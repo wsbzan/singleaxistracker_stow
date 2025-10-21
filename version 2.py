@@ -172,6 +172,8 @@ if __name__ == '__main__':
     dc_v2 = mc.results.dc['p_mp'] / 1000
 
     # Summarize results
+    print('Total energy output DC (kWh) - True Tracking:', dc.sum())
+    print('Total energy output DC (kWh) - Tracker Stall:', dc_v2.sum())
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 8), sharex=True)
     # True Tracking
     dc.plot(ax=axes[0],
@@ -185,5 +187,3 @@ if __name__ == '__main__':
     axes[1].set_xlabel('Time')
     plt.tight_layout()
     plt.show()
-    print('Total energy output DC (kWh) - True Tracking:', dc.sum())
-    print('Total energy output DC (kWh) - Tracker Stall:', dc_v2.sum())
