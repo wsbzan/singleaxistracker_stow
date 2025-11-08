@@ -85,6 +85,26 @@ def build_weather_data(
         'precipitable_water': psm3['precipitable_water'],  # for the spectral model
     })
 
+def recalculate_aoi_and_poa(
+    tracker_angles_df
+    axis_tilt,
+    axis_azimuth
+    ):
+    '''
+    Takes the new tracker angles from stow conditions
+    and recalculates aoi and poa at the new angle
+    '''
+    # need to read and reference the paper behind this function
+    surface = pvlib.tracking.calc_surface_orientation(
+            tracker_angles_df['tracker_theta'], axis_tilt, axis_azimuth)
+    aoi = pvlib.irradiance.aoi(surface['surface_tilt'],
+        surface['surface_azimuth'], solar_position['apparent_zenith'],
+        solar_position['azimuth'])
+    tracker_angles_df['aoi'] = aoi
+    tracker_angles_df['surface_tilt'] = surface_tilt
+    tracker_angles_df['surface_azimuth'] = surface_azimuth
+    return tracker_angles_df
+
 if __name__ == '__main__':
     # Input Parameters
     latitude, longitude = 39.74, -104.985 # Denver, CO example
@@ -146,23 +166,14 @@ if __name__ == '__main__':
     tracker_angles_2 = tracker_angles_1.copy()
     tracker_angles_2['tracker_theta'].iloc[12:95]=-55
     # need to read and reference the paper behind this function
-    surface = pvlib.tracking.calc_surface_orientation(
-            tracker_angles_2['tracker_theta'], axis_tilt, axis_azimuth)
-    surface_tilt = surface['surface_tilt']
-    surface_azimuth = surface['surface_azimuth']
-    aoi = pvlib.irradiance.aoi(surface_tilt, surface_azimuth,
-            solar_position['apparent_zenith'], solar_position['azimuth'])
-    tracker_angles_2['aoi'] = aoi
-    tracker_angles_2['surface_tilt'] = surface_tilt
-    tracker_angles_2['surface_azimuth'] = surface_azimuth
-
+    tracker_angles_2 = recalculate_aoi_and_poa(tracker_angles_2,
+                        axis_tilt, axis_azimuth)
     # Build weather data using different tracker angles to get POA
     wd_1 = build_weather_data(psm3, tracker_angles_1, solar_position, gcr,
         axis_height, pitch, temperature_model_parameters, module_unit_mass)
 
     wd_2 = build_weather_data(psm3, tracker_angles_2, solar_position, gcr,
         axis_height, pitch, temperature_model_parameters, module_unit_mass)
-
     mc.run_model_from_poa(wd_1)
     ac = mc.results.ac / 1000
     dc = mc.results.dc['p_mp'] / 1000
