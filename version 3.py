@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import pvlib
 import matplotlib.pyplot as plt
+from site_info import site_info as si
 
 def build_site(
     axis_tilt,
@@ -14,7 +15,7 @@ def build_site(
     strings_per_inverter,
     inverter_parameters,
     location
-):
+    ):
     '''
     Builds and returns pvlib modelchain and mount
     '''
@@ -82,11 +83,11 @@ def build_weather_data(
         'poa_direct': averaged_irradiance['poa_direct'],
         'poa_diffuse': averaged_irradiance['poa_diffuse'],
         'cell_temperature': cell_temperature,
-        'precipitable_water': psm3['precipitable_water'],  # for the spectral model
+        'precipitable_water': psm3['precipitable_water']  # for the spectral model
     })
 
 def recalculate_aoi_and_poa(
-    tracker_angles_df
+    tracker_angles_df,
     axis_tilt,
     axis_azimuth
     ):
@@ -105,35 +106,43 @@ def recalculate_aoi_and_poa(
     tracker_angles_df['surface_azimuth'] = surface_azimuth
     return tracker_angles_df
 
+def run_stow_conditions(
+    df
+    ):
+    '''
+    Adjusts tracker angles based on stow conditions
+    '''
+    for idx, row in df.iterrows():
+        # Stow Conditions
+        # Storm
+        # Hail
+        # Wind
+        if row['wind_speed'] > 10 or row['wind_gust_spd'] > 20:
+            if row['tracker_theta'] < 0:
+                df.at[idx, 'tracker_theta'] = -40
+            else:
+                df.at[idx, 'tracker_theta'] = 40
+        # Snow
+        # Flood
+
+    return df['tracker_theta']
+
 if __name__ == '__main__':
-    # Input Parameters
-    latitude, longitude = 39.74, -104.985 # Denver, CO example
-    tz = 'MST'
-    altitude = 1000
+    # Create Location Object
     location = pvlib.location.Location(
-        latitude=latitude,
-        longitude=longitude,
-        tz=tz,
-        altitude=altitude,
+        latitude=si['latitude'],
+        longitude=si['longitude'],
+        tz=si['tz'],
+        altitude=si['altitude'],
         name="Example Site"
     )
-    # Create time range
-    times = pd.date_range('2020-06-21', '2020-06-25', freq='1h', tz=tz)
-    # System Parameters
-    axis_tilt = 0
-    axis_azimuth = 180
-    max_angle = 60
-    backtrack = True
-    modules_per_string = 200
-    strings_per_inverter = 1
+    # Establish time range
+    times = pd.date_range('2024-01-01', '2024-01-31', freq='15m', tz=si['tz'])
+    # Get Solar Position
+    solar_position = location.get_solarposition(times)
+    # PVLIB Parameters
     # Temperature model
     temp_params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_polymer']
-    gcr=0.001 #single row, gcr -> 0
-    axis_height = 1 # meter
-    pitch = 5 # m
-    # default Faiman model parameters:
-    temperature_model_parameters = dict(u0=25.0, u1=6.84)
-    module_unit_mass = 12 / 0.72  # kg/m^2, taken from datasheet values
     # PV module and inverter models (use realistic specs)
     cec_module_db = pvlib.pvsystem.retrieve_sam('cecmod')
     module_parameters = cec_module_db['First_Solar__Inc__FS_4117_3']
@@ -141,39 +150,44 @@ if __name__ == '__main__':
     module_parameters['Technology'] = 'CdTe'
     cec_inverter_db = pvlib.pvsystem.retrieve_sam('cecinverter')
     inverter_parameters = cec_inverter_db['TMEIC__PVL_L1833GRM']
-    solar_position = location.get_solarposition(times)
+
+    # psm3 Weather Data
     api_key = 'Qwu9Ny75sGchX3wCrjcgFX7PePxJSMOt0xUgTeXC'
     email = "wsbzan@gmail.com"
     keys = ['ghi','dni','dhi','temp_air','wind_speed','albedo','precipitable_water']
-    psm3, psm3_metadata = pvlib.iotools.get_psm3(latitude, longitude, api_key,
+    psm3, psm3_metadata = pvlib.iotools.get_psm3(si['latitude'], si['longitude'], api_key,
                                                 email, interval = 15, names=2020,
                                                 map_variables=True, leap_day=True,
                                                 attributes=keys)
     psm3 = psm3.loc[times]
 
     # Access Functions
-    mc, mount = build_site(axis_tilt, axis_azimuth, max_angle, backtrack,
-        module_parameters,temperature_model_parameters, modules_per_string,
-        strings_per_inverter, inverter_parameters, location)
+    mc, mount = build_site(si['axis_tilt'], si['axis_azimuth'], si['max_angle'], si['backtrack'],
+        module_parameters,si['temperature_model_parameters'], si['modules_per_string'],
+        si['strings_per_inverter'], inverter_parameters, location)
 
-    # Adjust Tracker Angle
-    # Ideal Angle
+    # Import Stow Weather Data Sample
+    stow_weather_data = pd.read_csv('sample data.csv')
+    stow_weather_data.index = pd.to_datetime(stow_weather_data['timestamp_local'])
+
+    # Ideal Angles
     tracker_angles_1 = mount.get_orientation(
         solar_position['apparent_zenith'],
         solar_position['azimuth'])
-    # Example Adjusted Angle
-    # Tracker Stall at Noon on First Day to -25
+    # Stow Angles
     tracker_angles_2 = tracker_angles_1.copy()
-    tracker_angles_2['tracker_theta'].iloc[12:95]=-55
+    # Adjust Angle Based on Stow Conditions
+    tracker_angles_2 = run_stow_conditions(pd.concat([tracker_angles_2, stow_weather_data]))
+
     # need to read and reference the paper behind this function
     tracker_angles_2 = recalculate_aoi_and_poa(tracker_angles_2,
-                        axis_tilt, axis_azimuth)
-    # Build weather data using different tracker angles to get POA
-    wd_1 = build_weather_data(psm3, tracker_angles_1, solar_position, gcr,
-        axis_height, pitch, temperature_model_parameters, module_unit_mass)
+                        si['axis_tilt'], si['axis_azimuth'])
 
-    wd_2 = build_weather_data(psm3, tracker_angles_2, solar_position, gcr,
-        axis_height, pitch, temperature_model_parameters, module_unit_mass)
+    # Build weather data using different tracker angles to get POA
+    wd_1 = build_weather_data(psm3, tracker_angles_1, solar_position, si['gcr'],
+        si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
+    wd_2 = build_weather_data(psm3, tracker_angles_2, solar_position, si['gcr'],
+        si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
     mc.run_model_from_poa(wd_1)
     ac = mc.results.ac / 1000
     dc = mc.results.dc['p_mp'] / 1000
@@ -184,7 +198,7 @@ if __name__ == '__main__':
 
     # Summarize results
     print('Total energy output DC (kWh) - True Tracking:', dc.sum())
-    print('Total energy output DC (kWh) - Tracker Stall:', dc_v2.sum())
+    print('Total energy output DC (kWh) - Sample Wind Stow:', dc_v2.sum())
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 8), sharex=True)
     # True Tracking
     dc.plot(ax=axes[0],
@@ -193,7 +207,7 @@ if __name__ == '__main__':
     axes[0].set_xlabel('')
     # Tracker Stall Example
     dc_v2.plot(ax=axes[1],
-        title='Hourly Energy Output (kW) - Tracker Stall at -55 Deg',
+        title='Hourly Energy Output (kW) - Sample Wind Stow',
         ylabel='Power (kW)')
     axes[1].set_xlabel('Time')
     plt.tight_layout()
