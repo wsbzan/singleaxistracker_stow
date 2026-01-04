@@ -1,9 +1,9 @@
 site_info = \
 {
-    'latitude' : 39.74,
-    'longitude' : -104.985,
-    'tz' : 'MST',
-    'altitude' : 1000,
+    'latitude' : 42.38,
+    'longitude' : -71.099,
+    'tz' : 'EST',
+    'altitude' : 100,
     # System Parameters
     'axis_tilt' : 0,
     'axis_azimuth' : 180,
