@@ -1,9 +1,15 @@
 site_info = \
 {
+    # Site Name and Location
+    'name' : 'Example Site',
     'latitude' : 42.38,
-    'longitude' : -71.099,
+    'longitude' : -71.09,
     'tz' : 'EST',
     'altitude' : 100,
+    # Date Range and Frequency
+    'start' : '2024-01-01',
+    'end' : '2024-01-31',
+    'freq' : '15min',
     # System Parameters
     'axis_tilt' : 0,
     'axis_azimuth' : 180,
@@ -16,5 +22,8 @@ site_info = \
     'pitch' : 5, # m
     # default Faiman model parameters:
     'temperature_model_parameters' : dict(u0=25.0, u1=6.84),
-    'module_unit_mass' : 12 / 0.72  # kg/m^2, taken from datasheet values
+    'module_unit_mass' : 12 / 0.72,  # kg/m^2, taken from datasheet values
+    # Array, Inverter, and Module parameters
+    'module_name' : 'First_Solar__Inc__FS_4117_3',
+    'inverter__name' : 'TMEIC__PVL_L1833GRM'
 }

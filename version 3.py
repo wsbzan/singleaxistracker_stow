@@ -155,10 +155,13 @@ if __name__ == '__main__':
     api_key = 'Qwu9Ny75sGchX3wCrjcgFX7PePxJSMOt0xUgTeXC'
     email = "wsbzan@gmail.com"
     keys = ['ghi','dni','dhi','temp_air','wind_speed','albedo','precipitable_water']
-    psm3, psm3_metadata = pvlib.iotools.get_psm3(si['latitude'], si['longitude'], api_key,
-                                                email, interval = 15, names=2020,
-                                                map_variables=True, leap_day=True,
-                                                attributes=keys)
+    try:
+        psm3, psm3_metadata = pvlib.iotools.get_psm3(si['latitude'], si['longitude'], api_key,
+                                                    email, interval = 15, names=2015,
+                                                    map_variables=True, leap_day=True,
+                                                    attributes=keys)
+    except Exception as e:
+        print("Error retrieving PSM3 data:", e)
     psm3 = psm3.loc[times]
 
     # Access Functions

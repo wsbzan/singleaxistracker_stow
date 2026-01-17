@@ -15,7 +15,8 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip3 install --user -r requirements.txt",
+	// Install using the container's Python and point at the requirements file inside .devcontainer
+	"postCreateCommand": "python3 -m pip install --no-cache-dir -r .devcontainer/requirements.txt",
 
 	// Configure tool-specific properties.
 	"customizations": {// Configure properties specific to VS Code.
