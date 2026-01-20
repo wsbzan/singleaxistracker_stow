@@ -3,6 +3,7 @@ import numpy as np
 import pvlib
 import matplotlib.pyplot as plt
 from site_info import site_info as si
+from api_calls import api_call
 
 def build_site(
     axis_tilt,
@@ -112,18 +113,50 @@ def run_stow_conditions(
     '''
     Adjusts tracker angles based on stow conditions
     '''
+    df.add_column('trigger',np.nan,inplace=True)
+    df.add_column('stow_angle',np.nan,inplace=True)
+    df.add_column('stow_setpoint',np.nan,inplace=True)
+    relaxation_factor = 0
+    # Set Initial Tracker Angle and Setpoint
+    df.at[df.index[0], 'stow_setpoint'] = df.loc[df.index[0], 'tracker_theta']
+    df.at[df.index[0], 'stow_angle'] = df.loc[df.index[0], 'tracker_theta']
     for idx, row in df.iterrows():
         # Stow Conditions
+        # Check trigger
+        if df.loc[idx - 1, 'trigger'] is not np.nan and relaxation_factor > 0:
+            time_delta = (idx - (idx - 1)).total_seconds() / 3600
+            relaxation_factor -= time_delta
+            if relaxation_factor == 0:
+                continue
+
         # Storm
+
         # Hail
+
         # Wind
+        # X1 and X2
         if row['wind_speed'] > 10 or row['wind_gust_spd'] > 20:
-            if row['tracker_theta'] < 0:
-                df.at[idx, 'tracker_theta'] = -40
+            df.loc[idx, 'trigger'] = "Wind"
+            relaxation_factor = 20
+            # T1
+            if row['stow_angle'] < 0:
+                df.at[idx+1, 'stow_setpoint'] = -40
             else:
-                df.at[idx, 'tracker_theta'] = 40
+                df.at[idx+1, 'stow_setpoint'] = 40
         # Snow
+
         # Flood
+
+        # Determine delta between actual angle(idx) and setpoint angle (idx+1)
+        angle_delta = df.loc[idx+1, 'stow_setpoint'] - df.loc[idx, 'stow_angle']
+        # 20 degrees per time step (15 minutes)
+        max_angle_change = 20
+        if abs(angle_delta) > max_angle_change:
+            angle_delta = np.sign(angle_delta)
+            # Update stow angle for next time step
+            df.at[idx+1, 'stow_angle'] = df.loc[idx, 'stow_angle'] + angle_delta
+        else:
+            df.at[idx+1, 'stow_angle'] = df.loc[idx+1, 'stow_setpoint']
 
     return df['tracker_theta']
 
@@ -144,9 +177,29 @@ if __name__ == '__main__':
     # Solar Position based off location and times
     solar_position = location.get_solarposition(times)
     # Import Weather Data from PSM4
-    w_df = pd.read_csv('weather_data.csv', index_col=0, parse_dates=True)
+    if si['psm']:
+        api = api_call()
+        psm4_data = api.fetch_psm4_data()
+        with open('psm4_data.csv', 'w') as file:
+            file.write(psm4_data)
+        w_df = pd.read_csv('psm4_data.csv', index_col=0, parse_dates=True)
+    else:
+        w_df = pd.read_csv(si['psm_file'], index_col=0, parse_dates=True)
     # Import Stow Weather Data from Weatherbit
-    sw_df = pd.read_csv('stow_weather_data.csv', index_col=0, parse_dates=True)
+    if si['weaterbit']:
+        api = api_call()
+        weatherbit_data = api.fetch_weatherbit_data()
+        df = pd.json_normalize(weatherbit_data, 'data',["city_id","city_name","country_code","lat","lon","state_code","station_id","timezone"])
+        df.set_index(pd.to_datetime(df['timestamp_utc']), inplace=True)
+        df.rename(columns={
+            'temp':'temp_air',
+            'wind_spd':'wind_speed',
+            'precipitable_water':'precipitable_water'
+        }, inplace=True)
+        sw_df = df[['temp_air','wind_speed','precipitable_water']]
+        sw_df.to_csv('weatherbit_data.csv')
+    else:
+        sw_df = pd.read_csv(si['weatherbit_file'], index_col=0, parse_dates=True)
 
     # Phase B
     # Establish PVLIB Parameters, Modelchain, and Mount
@@ -184,34 +237,30 @@ if __name__ == '__main__':
     # Phase D
     # Build Weather Data and Estimate Power Output
     # Build weather data using different tracker angles to get POA
-    wd_1 = build_weather_data(w_df, tracker_angles_1, solar_position, si['gcr'],
-        si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
-    wd_2 = build_weather_data(w_df, tracker_angles_2, solar_position, si['gcr'],
-        si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
-    # Estimate Power Output for Ideal Angles
-    mc.run_model_from_poa(wd_1)
-    ac = mc.results.ac / 1000
-    dc = mc.results.dc['p_mp'] / 1000
-    # Estimate Power Output for Stow Angles
-    mc.run_model_from_poa(wd_2)
-    ac_v2 = mc.results.ac / 1000
-    dc_v2 = mc.results.dc['p_mp'] / 1000
+    results = []
+    for i in [tracker_angles_1, tracker_angles_2]:
+        wd = build_weather_data(w_df, i, solar_position, si['gcr'],
+            si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
+        mc.run_model_from_poa(wd)
+        ac = mc.results.ac / 1000
+        dc = mc.results.dc['p_mp'] / 1000
+        results.append([ac, dc])
 
     # Phase E
     # Analyze and Plot Results
     # Summarize results
-    print('Total energy output DC (kWh) - True Tracking:', dc.sum())
-    print('Total energy output DC (kWh) - Sample Wind Stow:', dc_v2.sum())
-    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 8), sharex=True)
-    # True Tracking
-    dc.plot(ax=axes[0],
-        title='Hourly Energy Output (kW) - True Tracking',
-        ylabel='Power (kW)')
-    axes[0].set_xlabel('')
-    # Tracker Stall Example
-    dc_v2.plot(ax=axes[1],
-        title='Hourly Energy Output (kW) - Sample Wind Stow',
-        ylabel='Power (kW)')
-    axes[1].set_xlabel('Time')
-    plt.tight_layout()
-    plt.show()
+    # print('Total energy output DC (kWh) - True Tracking:', dc.sum())
+    # print('Total energy output DC (kWh) - Sample Wind Stow:', dc_v2.sum())
+    # fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 8), sharex=True)
+    # # True Tracking
+    # dc.plot(ax=axes[0],
+    #     title='Hourly Energy Output (kW) - True Tracking',
+    #     ylabel='Power (kW)')
+    # axes[0].set_xlabel('')
+    # # Tracker Stall Example
+    # dc_v2.plot(ax=axes[1],
+    #     title='Hourly Energy Output (kW) - Sample Wind Stow',
+    #     ylabel='Power (kW)')
+    # axes[1].set_xlabel('Time')
+    # plt.tight_layout()
+    # plt.show()
