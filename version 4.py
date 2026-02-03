@@ -118,45 +118,75 @@ def run_stow_conditions(
     df.add_column('stow_setpoint',np.nan,inplace=True)
     relaxation_factor = 0
     # Set Initial Tracker Angle and Setpoint
-    df.at[df.index[0], 'stow_setpoint'] = df.loc[df.index[0], 'tracker_theta']
-    df.at[df.index[0], 'stow_angle'] = df.loc[df.index[0], 'tracker_theta']
+    df.at[df.index[0], 'stow_setpoint'] = df.at[df.index[0], 'tracker_theta']
+    df.at[df.index[0], 'stow_angle'] = df.at[df.index[0], 'tracker_theta']
+    max_angle = 60
     for idx, row in df.iterrows():
         # Stow Conditions
-        # Check trigger
-        if df.loc[idx - 1, 'trigger'] is not np.nan and relaxation_factor > 0:
-            time_delta = (idx - (idx - 1)).total_seconds() / 3600
-            relaxation_factor -= time_delta
-            if relaxation_factor == 0:
-                continue
-
         # Storm
-
-        # Hail
-
-        # Wind
-        # X1 and X2
-        if row['wind_speed'] > 10 or row['wind_gust_spd'] > 20:
-            df.loc[idx, 'trigger'] = "Wind"
-            relaxation_factor = 20
-            # T1
-            if row['stow_angle'] < 0:
-                df.at[idx+1, 'stow_setpoint'] = -40
+        if row['wind_speed'] > 25 or\
+            row['weather.description'] in \
+        ['Thunderstorm with light rain','Thunderstorm with rain','Thunderstorm with heavy rain','Thunderstorm with light drizzle',\
+        'Thunderstorm with drizzle','Thunderstorm with heavy drizzle','Thunderstorm with Hail']:
+            if df.at[idx, 'trigger'] is np.nan:
+                df.at[idx, 'trigger'] = "Storm"
+                relaxation_factor = 40
+                if row['stow_angle'] < 0:
+                    df.at[idx+1, 'stow_setpoint'] = - max_angle
+                else:
+                    df.at[idx+1, 'stow_setpoint'] = max_angle
             else:
-                df.at[idx+1, 'stow_setpoint'] = 40
+                pass
+                # already triggered, but I think I want to track that
+        # Wind
+        elif row['wind_speed'] > 10 or row['wind_gust_spd'] > 20:
+            if df.at[idx, 'trigger'] is np.nan: 
+                df.at[idx, 'trigger'] = "Wind"
+                relaxation_factor = 20
+                if row['stow_angle'] < 0:
+                    df.at[idx+1, 'stow_setpoint'] = -40
+                else:
+                    df.at[idx+1, 'stow_setpoint'] = 40
+            else:
+                pass
+                # already triggered, but I think I want to track that
         # Snow
-
-        # Flood
-
+        elif row['snow_rate'] > 0 or \
+        row['weather.description'] in \
+        ['Freezing Rain','Snow','Heavy Snow','Mix snow/rain','Sleet','Snow Shower','Heavy snow shower','Flurries']:
+            if df.at[idx, 'trigger'] is np.nan:
+                df.at[idx, 'trigger'] = "Snow"
+                relaxation_factor = 30
+                # Determine Wind Direction
+                # If Wind from East, Stow to East
+                if row['wind_dir'] >= 270 or row['wind_dir'] < 90:
+                    df.at[idx+1, 'stow_setpoint'] = max_angle
+                # If Wind from West, Stow to West  
+                else:
+                    df.at[idx+1, 'stow_setpoint'] = -max_angle
+            else:
+                pass
+                # already triggered, but I think I want to track that
+        # If no active trigger, check if relaxation factor is > 0
+        elif relaxation_factor > 0:
+            time_delta = (idx - (idx - 1)).total_seconds() / 60 # in minutes
+            relaxation_factor -= time_delta
+            if relaxation_factor > 0:
+                df.at[idx+1, 'stow_setpoint'] = df.at[idx, 'stow_setpoint']
+            else:
+                df.at[idx+1, 'stow_setpoint'] = df.at[idx+1, 'tracker_theta']
+        else:
+            df.at[idx+1, 'stow_setpoint'] = df.at[idx+1, 'tracker_theta']
         # Determine delta between actual angle(idx) and setpoint angle (idx+1)
-        angle_delta = df.loc[idx+1, 'stow_setpoint'] - df.loc[idx, 'stow_angle']
+        angle_delta = df.at[idx+1, 'stow_setpoint'] - df.at[idx, 'stow_angle']
         # 20 degrees per time step (15 minutes)
         max_angle_change = 20
         if abs(angle_delta) > max_angle_change:
             angle_delta = np.sign(angle_delta)
             # Update stow angle for next time step
-            df.at[idx+1, 'stow_angle'] = df.loc[idx, 'stow_angle'] + angle_delta
+            df.at[idx+1, 'stow_angle'] = df.at[idx, 'stow_angle'] + angle_delta
         else:
-            df.at[idx+1, 'stow_angle'] = df.loc[idx+1, 'stow_setpoint']
+            df.at[idx+1, 'stow_angle'] = df.at[idx+1, 'stow_setpoint']
 
     return df['tracker_theta']
 
