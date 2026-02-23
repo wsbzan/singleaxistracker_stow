@@ -4,17 +4,17 @@ site_info = \
     'name' : 'Example Site',
     'latitude' : 42.38,
     'longitude' : -71.09,
-    'tz' : 'EST',
+    'tz' : 'America/Chicago',
     'altitude' : 100,
     # Date Range and Frequency
     'start' : '2024-01-01',
-    'end' : '2024-01-31',
+    'end' : '2024-12-31',
     'freq' : '15min',
     # Data Import
     'psm': False,
     'weaterbit' : False,
-    'psm_file' : 'psm4_data.csv',
-    'weatherbit_file' : 'weatherbit_data.csv',
+    'psm_file' : 'sample_site_psm4.csv',
+    'weatherbit_file' : 'sample_site_weatherbit.csv',
     # System Parameters
     'axis_tilt' : 0,
     'axis_azimuth' : 180,
