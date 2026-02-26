@@ -119,6 +119,7 @@ def run_stow_conditions(
     Adjusts tracker angles based on stow conditions
     '''
     df.insert(0,'trigger',np.nan)
+    df['trigger'] = df['trigger'].astype('object')  # Ensure 'trigger' column is of object type to hold string values
     df.insert(1,'stow_angle',np.nan)
     df.insert(2,'stow_setpoint',np.nan)
     df['td'] = pd.to_datetime(df.index)
@@ -181,6 +182,7 @@ def run_stow_conditions(
                 # already triggered, but I think I want to track that
         # If no active trigger, check if relaxation factor is > 0
         elif relaxation_factor > 0:
+            df.at[idx, 'trigger'] = "Relaxing"
             time_delta = df.at[idx, 'time_delta'].total_seconds() / 60
             relaxation_factor -= time_delta
             if relaxation_factor > 0:
@@ -209,7 +211,10 @@ def run_stow_conditions(
         if abs(angle_delta) > max_angle_change:
             angle_delta = np.sign(angle_delta)
             # Update stow angle for next time step
-            df.at[next_idx, 'stow_angle'] = df.at[idx, 'stow_angle'] + angle_delta
+            if angle_1 < 0:
+                df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] - max_angle_change).clip(-max_angle, max_angle)
+            else:
+                df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] + max_angle_change).clip(-max_angle, max_angle)
         else:
             df.at[next_idx, 'stow_angle'] = df.at[next_idx, 'stow_setpoint']
 
@@ -284,7 +289,7 @@ if __name__ == '__main__':
     tracker_angles_1 = mount.get_orientation(
         solar_position['apparent_zenith'],
         solar_position['azimuth'])
-    tracker_angles_1['tracker_theta'] = tracker_angles_1['tracker_theta'].fillna(method='ffill')
+    tracker_angles_1['tracker_theta'] = tracker_angles_1['tracker_theta'].ffill()
     # Copy Ideal Angles over to Stow Angles
     # tracker_angles_2 = tracker_angles_1.copy()
     # Get Stow Conditions Angles
@@ -292,7 +297,14 @@ if __name__ == '__main__':
     # tracker_df = tracker_df[~tracker_df.index.duplicated(keep='first')]
     tracker_angles_2 = run_stow_conditions(tracker_df)
     tracker_angles_2.to_csv('tracker_angles_with_stow_conditions.csv')
+    vplotnum=1
+    if vplotnum == 1:
+        vplot = tracker_angles_2.loc[tracker_angles_2['timestamp_local'].str.startswith('4/1/24') |
+                            (tracker_angles_2['timestamp_local'].str.startswith('4/2/24')) |
+                            (tracker_angles_2['timestamp_local'].str.startswith('4/3/24')) |
+                            (tracker_angles_2['timestamp_local'].str.startswith('4/3/25'))]
     tracker_df.to_csv('tracker_df_with_stow_conditions_and_weather.csv')
+    vplot.to_csv('april 2 and 3 example.csv')
     # Recalculate AOI for Stow Angles
     # need to read and reference the paper behind this function
     # need to rename to remove poa as not part of below function
