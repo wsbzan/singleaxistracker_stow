@@ -48,7 +48,6 @@ def build_site(
     return modelchain, mount
 
 def build_weather_data(
-    ii,
     psm4,
     tracker_angles,
     solar_position,
@@ -61,20 +60,6 @@ def build_weather_data(
     '''
     Collects and returns weather data to run modelchain
     '''
-    # if ii == 1:
-    #     tracker_angles.index = tracker_angles.index.tz_localize(None)
-    #     solar_position.index = solar_position.index.tz_localize(None)
-    #     tracker_angles.drop(tracker_angles.tail(1).index,inplace=True)
-    #     solar_position.drop(solar_position.tail(1).index,inplace=True)
-    #     solar_position.index.names = ['timestamp_local']
-    #     tracker_angles.index.names = ['timestamp_local']
-    #     solpos = solar_position.index.to_series()
-    #     solpos.iloc[6632:29476] = solpos.iloc[6632:29476] - pd.Timedelta(hours=1)
-    #     solar_position.index = solpos
-    #     traang = tracker_angles.index.to_series()
-    #     traang.iloc[6632:29476] = traang.iloc[6632:29476] - pd.Timedelta(hours=1)
-    #     tracker_angles.index = traang
-    #     psm4.drop(psm4.tail(96).index,inplace=True)
     dni_extra = pvlib.irradiance.get_extra_radiation(solar_position.index)
     averaged_irradiance = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
         tracker_angles['surface_tilt'].values, tracker_angles['surface_azimuth'].values,
@@ -117,7 +102,7 @@ def recalculate_aoi_and_poa(
     sol_pos = solar_position.copy()
     sol_pos.index = sol_pos.index.tz_localize(None)
     surface = pvlib.tracking.calc_surface_orientation(
-            tracker_angles_df['tracker_theta'], axis_tilt, axis_azimuth)
+            tracker_angles_df['stow_angle'], axis_tilt, axis_azimuth)
     aoi = pvlib.irradiance.aoi(surface['surface_tilt'],
         surface['surface_azimuth'], sol_pos['apparent_zenith'],
         sol_pos['azimuth'])
@@ -281,7 +266,6 @@ if __name__ == '__main__':
     # Phase B
     # Establish PVLIB Parameters, Modelchain, and Mount
     # Temperature model
-    # Constant? Not sure if this will change
     temp_params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_polymer']
     # PV module and inverter models (use realistic specs)
     cec_module_db = pvlib.pvsystem.retrieve_sam('cecmod')
@@ -300,21 +284,15 @@ if __name__ == '__main__':
     tracker_angles_1 = mount.get_orientation(
         solar_position['apparent_zenith'],
         solar_position['azimuth'])
+    tracker_angles_1['tracker_theta'] = tracker_angles_1['tracker_theta'].fillna(method='ffill')
     # Copy Ideal Angles over to Stow Angles
-    tracker_angles_2 = tracker_angles_1.copy()
+    # tracker_angles_2 = tracker_angles_1.copy()
     # Get Stow Conditions Angles
-    # tracker_angles_2.index = tracker_angles_2.index.tz_localize(None)
-    # tracker_angles_2.index.names= ['timestamp_local']
-    # tracker_angles_2.drop(tracker_angles_2.tail(1).index,inplace=True)
-    
-    # # Merge on UTC timestamp
-    # tracker_df = tracker_angles_2_reset.merge(sw_df, on='timestamp_utc', how='left')
-    # tracker_df = tracker_df.set_index('timestamp_local')
-    # tracker_df = 
-    # tracker_angles_2 = tracker_angles_2[~tracker_angles_2.index.duplicated(keep='first')]
-    tracker_df = pd.concat([tracker_angles_2, input_df],axis=1)
+    tracker_df = pd.concat([tracker_angles_1, input_df],axis=1)
     # tracker_df = tracker_df[~tracker_df.index.duplicated(keep='first')]
     tracker_angles_2 = run_stow_conditions(tracker_df)
+    tracker_angles_2.to_csv('tracker_angles_with_stow_conditions.csv')
+    tracker_df.to_csv('tracker_df_with_stow_conditions_and_weather.csv')
     # Recalculate AOI for Stow Angles
     # need to read and reference the paper behind this function
     # need to rename to remove poa as not part of below function
@@ -324,11 +302,12 @@ if __name__ == '__main__':
     # Build Weather Data and Estimate Power Output
     # Build weather data using different tracker angles to get POA
     results = []
-    ii = 0
+    ii=0
     for i in [tracker_angles_1, tracker_angles_2]:
-        ii += 1
-        wd = build_weather_data(ii, input_df, i, solar_position, si['gcr'],
+        ii +=1
+        wd = build_weather_data(input_df, i, solar_position, si['gcr'],
             si['axis_height'], si['pitch'], si['temperature_model_parameters'], si['module_unit_mass'])
+        wd.to_csv('wd'+str(ii)+'.csv')
         mc.run_model_from_poa(wd)
         ac = mc.results.ac / 1000
         dc = mc.results.dc['p_mp'] / 1000
@@ -377,26 +356,8 @@ if __name__ == '__main__':
     print('Total energy output DC (kWh) - True Tracking:', results[0][1].sum())
     print('Total energy output DC (kWh) - Sample Wind Stow:', results[1][1].sum())
 
+    results[0][1].to_csv('true_tracking_dc_output.csv')
+    results[1][1].to_csv('stow_tracking_dc_output.csv')
+    tracker_angles_2.to_csv('tracker_angles_with_triggers.csv')
+
     print(results)
-
-    
-
-
-
-    # Phase E
-    # Analyze and Plot Results
-    # Summarize results
-    
-    # fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 8), sharex=True)
-    # # True Tracking
-    # dc.plot(ax=axes[0],
-    #     title='Hourly Energy Output (kW) - True Tracking',
-    #     ylabel='Power (kW)')
-    # axes[0].set_xlabel('')
-    # # Tracker Stall Example
-    # dc_v2.plot(ax=axes[1],
-    #     title='Hourly Energy Output (kW) - Sample Wind Stow',
-    #     ylabel='Power (kW)')
-    # axes[1].set_xlabel('Time')
-    # plt.tight_layout()
-    # plt.show()
