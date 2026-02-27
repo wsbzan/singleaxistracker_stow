@@ -173,10 +173,10 @@ def run_stow_conditions(
                 # Determine Wind Direction
                 # If Wind from East, Stow to East
                 if row['Wind Dir (Deg)'] >= 270 or row['Wind Dir (Deg)'] < 90:
-                    df.at[next_idx, 'stow_setpoint'] = max_angle
+                    df.at[next_idx, 'stow_setpoint'] = - max_angle
                 # If Wind from West, Stow to West  
                 else:
-                    df.at[next_idx, 'stow_setpoint'] = -max_angle
+                    df.at[next_idx, 'stow_setpoint'] = max_angle
             else:
                 pass
                 # already triggered, but I think I want to track that
@@ -195,23 +195,22 @@ def run_stow_conditions(
         # Determine delta between actual angle(idx) and setpoint angle (idx+1)
         stow_setpoint_val = df['stow_setpoint'].loc[next_idx]
         if isinstance(stow_setpoint_val, pd.Series):
-            angle_1 = stow_setpoint_val.iloc[0]
+            setpoint_angle = stow_setpoint_val.iloc[0]
         else:
-            angle_1 = stow_setpoint_val
+            setpoint_angle = stow_setpoint_val
         
         stow_angle_val = df['stow_angle'].loc[idx]
         if isinstance(stow_angle_val, pd.Series):
-            angle_2 = stow_angle_val.iloc[0]
+            current_angle = stow_angle_val.iloc[0]
         else:
-            angle_2 = stow_angle_val
+            current_angle = stow_angle_val
         
-        angle_delta = angle_1 - angle_2
+        angle_delta = setpoint_angle - current_angle
         # 20 degrees per time step (15 minutes)
         max_angle_change = 30
         if abs(angle_delta) > max_angle_change:
-            angle_delta = np.sign(angle_delta)
             # Update stow angle for next time step
-            if angle_1 < 0:
+            if (setpoint_angle < current_angle):
                 df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] - max_angle_change).clip(-max_angle, max_angle)
             else:
                 df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] + max_angle_change).clip(-max_angle, max_angle)
@@ -299,8 +298,7 @@ if __name__ == '__main__':
     tracker_angles_2.to_csv('tracker_angles_with_stow_conditions.csv')
     vplotnum=1
     if vplotnum == 1:
-        vplot = tracker_angles_2.loc[tracker_angles_2['timestamp_local'].str.startswith('4/1/24') |
-                            (tracker_angles_2['timestamp_local'].str.startswith('4/2/24')) |
+        vplot = tracker_angles_2.loc[(tracker_angles_2['timestamp_local'].str.startswith('4/2/24')) |
                             (tracker_angles_2['timestamp_local'].str.startswith('4/3/24')) |
                             (tracker_angles_2['timestamp_local'].str.startswith('4/3/25'))]
     tracker_df.to_csv('tracker_df_with_stow_conditions_and_weather.csv')
