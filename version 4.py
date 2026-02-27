@@ -172,7 +172,7 @@ def run_stow_conditions(
                 relaxation_factor = 30
                 # Determine Wind Direction
                 # If Wind from East, Stow to East
-                if row['Wind Dir (Deg)'] >= 270 or row['Wind Dir (Deg)'] < 90:
+                if row['Wind Dir (Deg)'] <=180:
                     df.at[next_idx, 'stow_setpoint'] = - max_angle
                 # If Wind from West, Stow to West  
                 else:
