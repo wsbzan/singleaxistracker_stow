@@ -1,0 +1,33 @@
+site_a = {
+    # Site Name and Location
+    'name' : 'Site A',
+    'latitude' : 42.07401,
+    'longitude' : -71.88317,
+    'tz' : 'America/New_York',
+    'altitude' : 135,
+    # Date Range and Frequency
+    'start' : '2024-01-01',
+    'end' : '2024-12-31',
+    'freq' : '15min',
+    # Data Import
+    'psm': False,
+    'weaterbit' : False,
+    'psm_file' : 'sample_site_psm4.csv',
+    'weatherbit_file' : 'sample_site_weatherbit.csv',
+    # System Parameters
+    'axis_tilt' : 0,
+    'axis_azimuth' : 180,
+    'max_angle' : 52,
+    'backtrack' : True,
+    'modules_per_string' : 200,
+    'strings_per_inverter' : 1,
+    'gcr' : 0.001, #single row, gcr -> 0
+    'axis_height' : 1, # meter
+    'pitch' : 5, # m
+    # default Faiman model parameters:
+    'temperature_model_parameters' : dict(u0=25.0, u1=6.84),
+    'module_unit_mass' : 12 / 0.72,  # kg/m^2, taken from datasheet values
+    # Array, Inverter, and Module parameters
+    'module_name' : 'First_Solar__Inc__FS_4117_3',
+    'inverter_name' : 'TMEIC__PVL_L1833GRM'
+}

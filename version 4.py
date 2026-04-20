@@ -227,7 +227,7 @@ if __name__ == '__main__':
     input_df = pd.read_csv('psmv4_weatherbit.csv', parse_dates=True)
     input_df['Timestamp (UTC)'] = pd.to_datetime(input_df['Timestamp (UTC)'])
     input_df.set_index('Timestamp (UTC)', inplace=True)
-    times = pd.date_range(si['start'], si['end'], freq=si['freq']) #, tz=si['tz'])
+    #times = pd.date_range(si['start'], si['end'], freq=si['freq']) #, tz=si['tz'])
     # Establish PVlib Location Object
     location = pvlib.location.Location(
         latitude=si['latitude'],
