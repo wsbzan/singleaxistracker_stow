@@ -2,7 +2,11 @@
 import pvlib as pv
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.widgets import RangeSlider
 from sites import site_a
+from datetime import time
 
 class Site:
     def __init__ (self, name):
@@ -195,7 +199,7 @@ class Site:
         )
         df['td'] = pd.to_datetime(df.index)
         df['time_delta'] = (df['td']-df['td'].shift())
-        relaxation_factor = 0; max_angle = 60
+        relaxation_factor = 0; max_angle = 52
         # Set Initial Tracker Angle and Setpoint
         df.at[df.index[0], 'stow_setpoint'] = df.at[df.index[0], 'tracker_theta']
         df.at[df.index[0], 'stow_angle'] = df.at[df.index[0], 'tracker_theta']
@@ -206,6 +210,76 @@ class Site:
     def save_results(self, output_path):
         # Code to save results to a file
         pass
+
+    def plot_scatter_with_datetime_slider(
+        self,
+        file_path,
+        datetime_col,
+        y_col,
+        usecols=None,
+        datetime_format=None,
+        initial_window_days=7
+    ):
+        """
+        Import CSV, set datetime index, filter columns, and show scatter plot
+        with a datetime range slider for interactive scrolling.
+        """
+        columns_to_read = usecols if usecols is not None else [datetime_col, y_col]
+
+        df = pd.read_csv(file_path, usecols=columns_to_read)
+        df[datetime_col] = pd.to_datetime(
+            df[datetime_col],
+            format=datetime_format,
+            errors='coerce'
+        )
+        df = df.dropna(subset=[datetime_col, y_col]).set_index(datetime_col).sort_index()
+
+        y_series = pd.to_numeric(df[y_col], errors='coerce').dropna()
+        plot_df = y_series.to_frame(name=y_col)
+
+        if plot_df.empty:
+            raise ValueError("No valid rows found after datetime/value filtering.")
+
+        x_num = mdates.date2num(plot_df.index.to_pydatetime())
+        y = plot_df[y_col].values
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        plt.subplots_adjust(bottom=0.22)
+
+        ax.scatter(plot_df.index, y, s=8, alpha=0.7)
+        ax.set_title(f"{self.name}: {y_col} vs {datetime_col}")
+        ax.set_xlabel(datetime_col)
+        ax.set_ylabel(y_col)
+        ax.grid(alpha=0.3)
+
+        full_min = float(np.min(x_num))
+        full_max = float(np.max(x_num))
+        default_window = min(initial_window_days, max(1, int(full_max - full_min)))
+        start = full_min
+        end = min(full_max, full_min + default_window)
+
+        ax.set_xlim(mdates.num2date(start), mdates.num2date(end))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        fig.autofmt_xdate()
+
+        slider_ax = fig.add_axes([0.12, 0.08, 0.76, 0.05])
+        time_slider = RangeSlider(
+            ax=slider_ax,
+            label='Datetime Range',
+            valmin=full_min,
+            valmax=full_max,
+            valinit=(start, end),
+            valstep=(x_num[1] - x_num[0]) if len(x_num) > 1 else None
+        )
+
+        def _update(val):
+            left, right = time_slider.val
+            ax.set_xlim(mdates.num2date(left), mdates.num2date(right))
+            fig.canvas.draw_idle()
+
+        time_slider.on_changed(_update)
+        plt.show()
+        return plot_df
 
     def combine_tracker_positions(self, fp1, fp2):
         stow_df = pd.read_csv(fp1, parse_dates=['Timestamp (UTC)']).set_index('Timestamp (UTC)')
@@ -218,12 +292,21 @@ class Site:
             .tz_convert(site_a["tz"])
             .tz_localize(None)
         )
-
+        
         stow_df.index = pd.to_datetime(stow_df.index, errors='coerce')
         tracker_df.index = pd.to_datetime(tracker_df.index, errors='coerce')
 
         stow_df = stow_df[stow_df.index.notna()]
         tracker_df = tracker_df[tracker_df.index.notna()]
+
+        # Alter rest angle of real tracker
+        # Build mask:
+        # 12:00 AM -> 7:00 AM (inclusive) OR 4:15 PM -> 11:59:59 PM
+        t = tracker_df.index.time
+        mask = (t <= time(7, 0)) | (t >= time(16, 15))
+
+        # Set pos columns to 0 during those hours
+        tracker_df.loc[mask, ["pos1", "pos2", "pos3"]] = 0
 
         combined_df = pd.merge(
             stow_df,
@@ -239,6 +322,7 @@ class Site:
 
 if __name__ == "__main__":
     x = Site("Site A")
+
     # print(x.name)
     # x.build_array(site_a)
     # x.import_stow_weather_data("Final Version/WeatherBit Data/Site A.csv")
@@ -249,3 +333,10 @@ if __name__ == "__main__":
     combined = x.combine_tracker_positions("Final Version/Output/site_a_stow_conditions.csv",
                                 "Final Version/Nexamp Data/Site A.csv")
     combined.to_csv("Final Version/Output/site_a_combined.csv")
+    # x.plot_scatter_with_datetime_slider(
+    #     file_path="Final Version/Output/site_a_combined.csv",
+    #     datetime_col="timestamp",
+    #     y_col="stow_angle",
+    #     usecols=["timestamp", "stow_angle", "tracker_theta", "pos1", "pos2", "pos3"],
+    #     datetime_format="%Y-%m-%d %H:%M:%S",
+    #     initial_window_days=7)
