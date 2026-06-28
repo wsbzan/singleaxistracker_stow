@@ -1,4 +1,4 @@
-﻿"Site Time","Nextracker 01: Tracker Position 1 (TrackerPos1) Degrees","Nextracker 01: Tracker Position 2 (TrackerPos2) Degrees","Nextracker 01: Tracker Position 3 (TrackerPos3) Degrees"
+﻿"Site Time","pos1","pos2","pos3"
 01-01-2024 00:00:00,57.21,57.32,57.32
 01-01-2024 00:15:00,57.21,57.323,57.271
 01-01-2024 00:30:00,57.21,57.362,57.32
