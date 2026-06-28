@@ -249,17 +249,16 @@ class Site:
         combined_df.index.name = 'timestamp'
         return combined_df
 
+    def runall():
 
 if __name__ == "__main__":
     x = Site("Site A")
-
-    # print(x.name)
-    # x.build_array(site_a)
-    # x.import_stow_weather_data("Final Version/WeatherBit Data/Site A.csv")
-    # x.get_ideal_tracker_angles()
-    # stow_conditions = x.process_stow_conditions()
-    # # print(stow_conditions.head(50))
-    # stow_conditions.to_csv("Final Version/Output/site_a_stow_conditions.csv")
+    x.build_array(site_a)
+    x.import_stow_weather_data("Final Version/WeatherBit Data/Site A.csv")
+    x.get_ideal_tracker_angles()
+    stow_conditions = x.process_stow_conditions()
+    # print(stow_conditions.head(50))
+    stow_conditions.to_csv("Final Version/Output/site_a_stow_conditions.csv")
     combined = x.combine_tracker_positions("Final Version/Output/site_a_stow_conditions.csv",
                                 "Final Version/Nexamp Data/Site A.csv")
     combined.to_csv("Final Version/Output/site_a_combined.csv")
