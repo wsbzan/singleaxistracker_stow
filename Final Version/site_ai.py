@@ -7,11 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.widgets import RangeSlider
 from datetime import time
-
-try:
-    from sites import sites as SITE_CONFIGS
-except Exception:
-    SITE_CONFIGS = {}
+from sites import sites as SITE_CONFIGS
 
 class Site:
     def __init__ (self, name):
@@ -213,7 +209,7 @@ class Site:
 
         stow_conditions = self.run_stow_conditions(df, relaxation_factor, max_angle)
         return stow_conditions
-
+    
     def save_results(self, output_path):
         # Code to save results to a file
         pass
@@ -221,29 +217,33 @@ class Site:
     def combine_tracker_positions(self, fp1, fp2):
         stow_df = pd.read_csv(fp1, parse_dates=['Timestamp (UTC)']).set_index('Timestamp (UTC)')
         tracker_df = pd.read_csv(fp2, parse_dates=['Site Time']).set_index('Site Time')
-
+        site_tz = getattr(self, 'tz')
         # stow timestamps are UTC, convert to local site time
         stow_df.index = (
             pd.to_datetime(stow_df.index, errors="coerce")
             .tz_localize("UTC")
-            .tz_convert(self.tz)
+            .tz_convert(site_tz)
             .tz_localize(None)
         )
-        
+
+        tracker_idx = pd.to_datetime(tracker_df.index, errors='coerce')
+        if getattr(tracker_idx, 'tz', None) is not None:
+            tracker_idx = tracker_idx.tz_convert(site_tz).tz_localize(None)
+        tracker_df.index = tracker_idx
+
         stow_df.index = pd.to_datetime(stow_df.index, errors='coerce')
-        tracker_df.index = pd.to_datetime(tracker_df.index, errors='coerce')
 
         stow_df = stow_df[stow_df.index.notna()]
         tracker_df = tracker_df[tracker_df.index.notna()]
 
-        # Alter rest angle of real tracker
-        # Build mask:
-        # 12:00 AM -> 7:00 AM (inclusive) OR 4:15 PM -> 11:59:59 PM
-        t = tracker_df.index.time
-        mask = (t <= time(7, 0)) | (t >= time(16, 15))
+        # # Alter rest angle of real tracker
+        # # Build mask:
+        # # 12:00 AM -> 7:00 AM (inclusive) OR 4:15 PM -> 11:59:59 PM
+        # t = tracker_df.index.time
+        # mask = (t <= time(7, 0)) | (t >= time(16, 15))
 
-        # Set pos columns to 0 during those hours
-        tracker_df.loc[mask, ["pos1", "pos2", "pos3"]] = 0
+        # # Set pos columns to 0 during those hours
+        # tracker_df.loc[mask, ["pos1", "pos2", "pos3"]] = 0
 
         combined_df = pd.merge(
             stow_df,
@@ -254,6 +254,11 @@ class Site:
         ).sort_index()
 
         combined_df.index.name = 'timestamp'
+
+        # Ensure td always matches timestamp timezone basis in combined output.
+        if 'td' in combined_df.columns:
+            combined_df['td'] = combined_df.index
+
         return combined_df
 
     def plot_combined_scatter(self, combined_df, output_path):
@@ -301,18 +306,10 @@ class Site:
             'inverter_name': 'TMEIC__PVL_L1833GRM',
         }
 
-        fallback_site_params = {
-            'site_a': {'latitude': 42.07401, 'longitude': -71.88317, 'altitude': 135},
-            'site_b': {'latitude': 42.672, 'longitude': -72.557, 'altitude': 135},
-            'site_c': {'latitude': 42.606, 'longitude': -71.7876, 'altitude': 135},
-            'site_d': {'latitude': 43.9726, 'longitude': -92.8633, 'altitude': 135},
-        }
-
         site_files = {
             'site_a': 'Site A.csv',
             'site_b': 'Site B.csv',
             'site_c': 'Site C.csv',
-            'site_d': 'Site D.csv',
         }
 
         for site_key, csv_name in site_files.items():
@@ -329,7 +326,6 @@ class Site:
             config_from_sites = SITE_CONFIGS.get(site_key, {}) if isinstance(SITE_CONFIGS, dict) else {}
             params = {
                 **base_params,
-                **fallback_site_params.get(site_key, {}),
                 **config_from_sites,
             }
 
@@ -351,5 +347,53 @@ class Site:
 
             print(f'Finished {site_key}: {combined_out}, {scatter_out}')
 
+    @staticmethod
+    def mae(fp):
+        df = pd.read_csv(fp, parse_dates=['timestamp']).set_index('timestamp')
+        df['avg_pos_angle'] = df[['pos1', 'pos2', 'pos3']].mean(axis=1)
+
+        # Keep only timestamps where stow_angle is within 20 degrees of avg_pos_angle.
+        within_20 = np.abs(df['stow_angle'] - df['avg_pos_angle']) <= 20
+        outside_20 = np.abs(df['stow_angle'] - df['avg_pos_angle']) > 20
+        filtered_df_w = df.loc[within_20, ['avg_pos_angle', 'stow_angle']].dropna()
+        filtered_df_o = df.loc[outside_20, ['avg_pos_angle', 'stow_angle']].dropna()
+        active_stow = df['trigger']!= "Ideal Tracking"
+        ideal_tracking = df['trigger']== "Ideal Tracking"
+        filtered_df_as = df.loc[active_stow, ['avg_pos_angle', 'stow_angle']].dropna()
+        filtered_df_it = df.loc[ideal_tracking, ['avg_pos_angle', 'stow_angle']].dropna()
+
+        mae_value_w = np.mean(np.abs(filtered_df_w['avg_pos_angle'] - filtered_df_w['stow_angle']))
+        mae_value_o = np.mean(np.abs(filtered_df_o['avg_pos_angle'] - filtered_df_o['stow_angle']))
+        percent_w = (len(filtered_df_w) / len(df)) * 100
+        percent_o = (len(filtered_df_o) / len(df)) * 100
+
+        mae_value_as = np.mean(np.abs(filtered_df_as['avg_pos_angle'] - filtered_df_as['stow_angle']))
+        mae_value_it = np.mean(np.abs(filtered_df_it['avg_pos_angle'] - filtered_df_it['stow_angle']))
+        percent_as = (len(filtered_df_as) / len(df)) * 100
+        percent_it = (len(filtered_df_it) / len(df)) * 100
+
+        print(len(df))
+        print(len(filtered_df_w))
+        print(len(filtered_df_o))
+        print(len(filtered_df_as))
+        print(len(filtered_df_it))
+
+        return {
+            'mae_within_20': mae_value_w,
+            'mae_outside_20': mae_value_o,
+            'percent_within_20': percent_w,
+            'percent_outside_20': percent_o,
+            'mae_active_stow': mae_value_as,
+            'mae_ideal_tracking': mae_value_it,
+            'percent_active_stow': percent_as,
+            'percent_ideal_tracking': percent_it
+        }
+
 if __name__ == "__main__":
-    Site.runall()
+    # Site.runall()
+    print('Site A')
+    print(Site.mae(fp='Final Version/Output/site_a_combined.csv'))
+    print('Site B')
+    print(Site.mae(fp='Final Version/Output/site_b_combined.csv'))
+    print('Site C')
+    print(Site.mae(fp='Final Version/Output/site_c_combined.csv'))

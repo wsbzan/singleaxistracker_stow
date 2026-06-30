@@ -39,6 +39,7 @@ class Site:
 
     def build_array(self, param_dict):
         # Code to build an array of weather data
+        self.site_tz = param_dict['tz']
         # Temperature model
         temp_params = pv.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_polymer']
         # PV module and inverter models (use realistic specs)
@@ -197,7 +198,15 @@ class Site:
             stow_setpoint=np.nan,
             tracker_theta=self.get_ideal_tracker_angles()
         )
-        df['td'] = pd.to_datetime(df.index)
+        # Keep td in local site time so it matches downstream merged timestamps.
+        if hasattr(self, 'site_tz') and self.site_tz:
+            df['td'] = (
+                pd.to_datetime(df.index, utc=True, errors='coerce')
+                .tz_convert(self.site_tz)
+                .tz_localize(None)
+            )
+        else:
+            df['td'] = pd.to_datetime(df.index, errors='coerce')
         df['time_delta'] = (df['td']-df['td'].shift())
         relaxation_factor = 0; max_angle = 52
         # Set Initial Tracker Angle and Setpoint
@@ -215,28 +224,34 @@ class Site:
         stow_df = pd.read_csv(fp1, parse_dates=['Timestamp (UTC)']).set_index('Timestamp (UTC)')
         tracker_df = pd.read_csv(fp2, parse_dates=['Site Time']).set_index('Site Time')
 
+        site_tz = getattr(self, 'site_tz', site_a['tz'])
+
         # stow timestamps are UTC, convert to local site time
         stow_df.index = (
             pd.to_datetime(stow_df.index, errors="coerce")
             .tz_localize("UTC")
-            .tz_convert(site_a["tz"])
+            .tz_convert(site_tz)
             .tz_localize(None)
         )
-        
+
+        tracker_idx = pd.to_datetime(tracker_df.index, errors='coerce')
+        if getattr(tracker_idx, 'tz', None) is not None:
+            tracker_idx = tracker_idx.tz_convert(site_tz).tz_localize(None)
+        tracker_df.index = tracker_idx
+
         stow_df.index = pd.to_datetime(stow_df.index, errors='coerce')
-        tracker_df.index = pd.to_datetime(tracker_df.index, errors='coerce')
 
         stow_df = stow_df[stow_df.index.notna()]
         tracker_df = tracker_df[tracker_df.index.notna()]
 
-        # Alter rest angle of real tracker
-        # Build mask:
-        # 12:00 AM -> 7:00 AM (inclusive) OR 4:15 PM -> 11:59:59 PM
-        t = tracker_df.index.time
-        mask = (t <= time(7, 0)) | (t >= time(16, 15))
+        # # Alter rest angle of real tracker
+        # # Build mask:
+        # # 12:00 AM -> 7:00 AM (inclusive) OR 4:15 PM -> 11:59:59 PM
+        # t = tracker_df.index.time
+        # mask = (t <= time(7, 0)) | (t >= time(16, 15))
 
-        # Set pos columns to 0 during those hours
-        tracker_df.loc[mask, ["pos1", "pos2", "pos3"]] = 0
+        # # Set pos columns to 0 during those hours
+        # tracker_df.loc[mask, ["pos1", "pos2", "pos3"]] = 0
 
         combined_df = pd.merge(
             stow_df,
@@ -247,9 +262,15 @@ class Site:
         ).sort_index()
 
         combined_df.index.name = 'timestamp'
+
+        # Ensure td always matches timestamp timezone basis in combined output.
+        if 'td' in combined_df.columns:
+            combined_df['td'] = combined_df.index
+
         return combined_df
 
     def runall():
+        pass
 
 if __name__ == "__main__":
     x = Site("Site A")
