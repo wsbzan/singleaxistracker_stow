@@ -389,11 +389,127 @@ class Site:
             'percent_ideal_tracking': percent_it
         }
 
+    @staticmethod
+    def stow_metrics(fp, weather_fp=None, axis_tilt=0, axis_azimuth=180):
+        df = pd.read_csv(fp, parse_dates=['timestamp']).set_index('timestamp')
+        df['avg_pos_angle'] = df[['pos1', 'pos2', 'pos3']].mean(axis=1)
+
+        def _first_existing(columns, candidates, required=True):
+            for candidate in candidates:
+                if candidate in columns:
+                    return candidate
+            if required:
+                raise ValueError(f"Missing required column. Expected one of: {', '.join(candidates)}")
+            return None
+
+        if weather_fp is not None:
+            weather_df = pd.read_csv(weather_fp)
+            if 'Timestamp (Local)' in weather_df.columns:
+                weather_df['timestamp'] = pd.to_datetime(weather_df['Timestamp (Local)'], errors='coerce')
+            elif 'timestamp' in weather_df.columns:
+                weather_df['timestamp'] = pd.to_datetime(weather_df['timestamp'], errors='coerce')
+            elif 'Timestamp (UTC)' in weather_df.columns:
+                weather_df['timestamp'] = pd.to_datetime(weather_df['Timestamp (UTC)'], errors='coerce')
+            else:
+                raise ValueError('weather_fp must include a timestamp column such as Timestamp (Local) or Timestamp (UTC).')
+
+            weather_df.set_index('timestamp', inplace=True)
+            weather_df.index = pd.to_datetime(weather_df.index, errors='coerce')
+            weather_df = weather_df[weather_df.index.notna()]
+
+            weather_column_map = {
+                'GHI': ['GHI', 'GHI (W/m^2)'],
+                'DHI': ['DHI', 'DHI (W/m^2)'],
+                'DNI': ['DNI', 'DNI (W/m^2)'],
+                'Solar Elevation Angle (Deg)': ['Solar Elevation Angle (Deg)'],
+                'Solar Azimuth Angle (Deg)': ['Solar Azimuth Angle (Deg)'],
+                'Surface Albedo': ['Surface Albedo'],
+                'apparent_zenith': ['apparent_zenith']
+            }
+
+            for target_column, candidate_columns in weather_column_map.items():
+                if target_column not in df.columns:
+                    source_column = _first_existing(weather_df.columns, candidate_columns, required=False)
+                    if source_column is not None:
+                        df[target_column] = weather_df[source_column].reindex(df.index)
+
+        active_stow = df['trigger'].fillna('Ideal Tracking') != 'Ideal Tracking'
+        filtered_df_as = df.loc[active_stow, ['avg_pos_angle', 'stow_angle']].dropna()
+        mae_value_as = np.mean(np.abs(filtered_df_as['avg_pos_angle'] - filtered_df_as['stow_angle']))
+        percent_as = (len(filtered_df_as) / len(df)) * 100 if len(df) else np.nan
+
+        required_weather_columns = [
+            'GHI',
+            'DHI',
+            'DNI',
+            'Solar Azimuth Angle (Deg)'
+        ]
+        missing_weather = [column for column in required_weather_columns if column not in df.columns]
+        if missing_weather:
+            raise ValueError(
+                'Missing irradiance inputs for the stow comparison: '
+                + ', '.join(missing_weather)
+                + '. Provide weather_fp or pre-merge these columns into the input file.'
+            )
+
+        solar_azimuth = df['Solar Azimuth Angle (Deg)']
+        if 'apparent_zenith' in df.columns:
+            solar_zenith = df['apparent_zenith']
+        elif 'Solar Elevation Angle (Deg)' in df.columns:
+            solar_zenith = 90 - df['Solar Elevation Angle (Deg)']
+        else:
+            raise ValueError(
+                'Missing solar position inputs for the stow comparison. '
+                'Provide either apparent_zenith or Solar Elevation Angle (Deg).'
+            )
+
+        dni_extra = pv.irradiance.get_extra_radiation(df.index)
+        albedo = df['Surface Albedo'] if 'Surface Albedo' in df.columns else 0.2
+
+        stow_surface = pv.tracking.calc_surface_orientation(df['stow_angle'], axis_tilt, axis_azimuth)
+        avg_surface = pv.tracking.calc_surface_orientation(df['avg_pos_angle'], axis_tilt, axis_azimuth)
+
+        poa_stow = pv.irradiance.get_total_irradiance(
+            surface_tilt=stow_surface['surface_tilt'],
+            surface_azimuth=stow_surface['surface_azimuth'],
+            solar_zenith=solar_zenith,
+            solar_azimuth=solar_azimuth,
+            dni=df['DNI'],
+            ghi=df['GHI'],
+            dhi=df['DHI'],
+            dni_extra=dni_extra,
+            albedo=albedo
+        )['poa_global']
+
+        poa_avg_pos = pv.irradiance.get_total_irradiance(
+            surface_tilt=avg_surface['surface_tilt'],
+            surface_azimuth=avg_surface['surface_azimuth'],
+            solar_zenith=solar_zenith,
+            solar_azimuth=solar_azimuth,
+            dni=df['DNI'],
+            ghi=df['GHI'],
+            dhi=df['DHI'],
+            dni_extra=dni_extra,
+            albedo=albedo
+        )['poa_global']
+
+        active_poa_delta = (poa_stow - poa_avg_pos).loc[active_stow].dropna()
+
+        return {
+            'mae_active_stow': mae_value_as,
+            'percent_active_stow': percent_as,
+            'poa_stow_mean_active_stow': poa_stow.loc[active_stow].mean(),
+            'poa_avg_pos_mean_active_stow': poa_avg_pos.loc[active_stow].mean(),
+            'poa_difference_mean_active_stow': active_poa_delta.mean(),
+            'poa_difference_abs_mean_active_stow': active_poa_delta.abs().mean()
+        }
+
 if __name__ == "__main__":
-    # Site.runall()
+    Site.runall()
     print('Site A')
-    print(Site.mae(fp='Final Version/Output/site_a_combined.csv'))
-    print('Site B')
-    print(Site.mae(fp='Final Version/Output/site_b_combined.csv'))
-    print('Site C')
-    print(Site.mae(fp='Final Version/Output/site_c_combined.csv'))
+    print(Site.stow_metrics(fp='Final Version/Output/site_a_combined.csv',
+                            weather_fp='Final Version/WeatherBit Data/Site A.csv'))
+    # print('Site B')
+    # print(Site.mae(fp='Final Version/Output/site_b_combined.csv'))
+    # print('Site C')
+    # print(Site.mae(fp='Final Version/Output/site_c_combined.csv'))
