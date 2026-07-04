@@ -21,7 +21,7 @@ sites = {
     'backtrack' : True,
     'modules_per_string' : 200,
     'strings_per_inverter' : 1,
-    'gcr' : 0.001, #single row, gcr -> 0
+    'gcr' : 0.499,
     'axis_height' : 1, # meter
     'pitch' : 5, # m
     # default Faiman model parameters:
@@ -53,7 +53,7 @@ sites = {
     'backtrack' : True,
     'modules_per_string' : 68,
     'strings_per_inverter' : 1,
-    'gcr' : 0.001, #single row, gcr -> 0
+    'gcr' : 0.352, #single row, gcr -> 0
     'axis_height' : 1, # meter
     'pitch' : 5, # m
     # default Faiman model parameters:
@@ -85,7 +85,7 @@ sites = {
     'backtrack' : True,
     'modules_per_string' : 78,
     'strings_per_inverter' : 1,
-    'gcr' : 0.001, #single row, gcr -> 0
+    'gcr' : 0.258, #single row, gcr -> 0
     'axis_height' : 1, # meter
     'pitch' : 5, # m
     # default Faiman model parameters:
@@ -117,7 +117,7 @@ sites = {
     'backtrack' : True,
     'modules_per_string' : 147,
     'strings_per_inverter' : 1,
-    'gcr' : 0.001, #single row, gcr -> 0
+    'gcr' : 0.449,
     'axis_height' : 1, # meter
     'pitch' : 5, # m
     # default Faiman model parameters:
@@ -149,7 +149,7 @@ sites = {
     'backtrack' : True,
     'modules_per_string' : 55,
     'strings_per_inverter' : 1,
-    'gcr' : 0.001, #single row, gcr -> 0
+    'gcr' : 0.5,
     'axis_height' : 1, # meter
     'pitch' : 5, # m
     # default Faiman model parameters:

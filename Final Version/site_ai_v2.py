@@ -85,7 +85,8 @@ class Site:
             axis_tilt=param_dict['axis_tilt'],
             axis_azimuth=param_dict['axis_azimuth'],
             max_angle=param_dict['max_angle'],
-            backtrack=param_dict['backtrack']
+            backtrack=param_dict['backtrack'],
+            gcr = param_dict['gcr']
         )
         # Array
         self.array = pv.pvsystem.Array(
@@ -210,20 +211,17 @@ class Site:
         stow_df = pd.read_csv(fp1, parse_dates=['Timestamp (UTC)']).set_index('Timestamp (UTC)')
         tracker_df = pd.read_csv(fp2, parse_dates=['Site Time']).set_index('Site Time')
         site_tz = getattr(self, 'tz')
-        # stow timestamps are UTC, convert to local site time
-        stow_df.index = (
-            pd.to_datetime(stow_df.index, errors="coerce")
-            .tz_localize("UTC")
-            .tz_convert(site_tz)
-            .tz_localize(None)
-        )
+        # Normalize both tracker and stow timestamps to UTC so the merged output has
+        # a single, unambiguous timeline across DST transitions.
+        stow_df.index = pd.to_datetime(stow_df.index, errors='coerce', utc=True)
 
+        tracker_df = tracker_df[tracker_df.index.notna()].sort_index()
         tracker_idx = pd.to_datetime(tracker_df.index, errors='coerce')
-        if getattr(tracker_idx, 'tz', None) is not None:
-            tracker_idx = tracker_idx.tz_convert(site_tz).tz_localize(None)
-        tracker_df.index = tracker_idx
-
-        stow_df.index = pd.to_datetime(stow_df.index, errors='coerce')
+        tracker_df.index = tracker_idx.tz_localize(
+            site_tz,
+            ambiguous=~tracker_idx.duplicated(keep='first'),
+            nonexistent='shift_forward'
+        ).tz_convert('UTC')
 
         stow_df = stow_df[stow_df.index.notna()]
         tracker_df = tracker_df[tracker_df.index.notna()]
@@ -388,23 +386,14 @@ class Site:
     @staticmethod
     def stow_metrics(fp, weather_fp, year, loc, axis_tilt=0, axis_azimuth=180):
         df = pd.read_csv(fp, parse_dates=['timestamp']).set_index('timestamp')
-        df.index = pd.to_datetime(df.index, errors='coerce')
+        df.index = pd.to_datetime(df.index, errors='coerce', utc=True)
         df = df[df.index.notna()]
         # Restrict metrics calculations to the 2024 calendar year.
         df = df[df.index.year == year]
         df['avg_pos_angle'] = df[['pos1', 'pos2', 'pos3']].mean(axis=1)
         weather_df = pd.read_csv(weather_fp)
-        if 'Timestamp (UTC)' in weather_df.columns:
-            weather_df['timestamp'] = pd.to_datetime(weather_df['Timestamp (UTC)'], errors='coerce')
-        elif 'Timestamp (Local)' in weather_df.columns:
-            weather_df['timestamp'] = pd.to_datetime(weather_df['Timestamp (Local)'], errors='coerce')
-        elif 'timestamp' in weather_df.columns:
-            weather_df['timestamp'] = pd.to_datetime(weather_df['timestamp'], errors='coerce')
-        else:
-            raise ValueError('weather_fp must include a timestamp column such as Timestamp (Local) or Timestamp (UTC).')
-
-        weather_df.set_index('timestamp', inplace=True)
-        weather_df.index = pd.to_datetime(weather_df.index, errors='coerce')
+        weather_df.set_index('Timestamp (UTC)', inplace=True)
+        weather_df.index = pd.to_datetime(weather_df.index, errors='coerce', utc=True)
         weather_df = weather_df[weather_df.index.notna()]
         weather_df = weather_df[weather_df.index.year == year]
 
@@ -433,19 +422,22 @@ class Site:
         stow_surface = pv.tracking.calc_surface_orientation(df['stow_angle'], axis_tilt, axis_azimuth)
         avg_surface = pv.tracking.calc_surface_orientation(df['avg_pos_angle'], axis_tilt, axis_azimuth)
 
-        stow_aoi = pv.irradiance.aoi(
-            surface_tilt=stow_surface['surface_tilt'],
-            surface_azimuth=stow_surface['surface_azimuth'],
-            solar_zenith=solar_position['apparent_zenith'],
-            solar_azimuth=solar_position['azimuth']
-        )
+        stow_surface.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_stow_surface.csv')
+        avg_surface.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_avg_surface.csv')
+        solar_position.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_solar_position.csv')
 
-        avg_aoi = pv.irradiance.aoi(
-            surface_tilt=avg_surface['surface_tilt'],
-            surface_azimuth=avg_surface['surface_azimuth'],
-            solar_zenith=solar_position['apparent_zenith'],
-            solar_azimuth=solar_position['azimuth']
-        )
+        # stow_aoi = pv.irradiance.aoi(
+        #     surface_tilt=stow_surface['surface_tilt'],
+        #     surface_azimuth=stow_surface['surface_azimuth'],
+        #     solar_zenith=solar_position['apparent_zenith'],
+        #     solar_azimuth=solar_position['azimuth']
+        # )
+        # avg_aoi = pv.irradiance.aoi(
+        #     surface_tilt=avg_surface['surface_tilt'],
+        #     surface_azimuth=avg_surface['surface_azimuth'],
+        #     solar_zenith=solar_position['apparent_zenith'],
+        #     solar_azimuth=solar_position['azimuth']
+        # )
 
         poa_stow = pv.irradiance.get_total_irradiance(
             surface_tilt=stow_surface['surface_tilt'],
@@ -471,6 +463,8 @@ class Site:
             albedo=albedo
         )['poa_global']
 
+        poa_stow.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_poa_stow.csv')
+        poa_avg_pos.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_poa_avg_pos.csv')
         poa_stow_total_year = poa_stow.sum(min_count=1)
         poa_avg_pos_total_year = poa_avg_pos.sum(min_count=1)
         poa_difference_total_year = poa_stow_total_year - poa_avg_pos_total_year
@@ -482,11 +476,15 @@ class Site:
             'poa_avg_pos_total_year': poa_avg_pos_total_year,
             'poa_difference_total_year': poa_difference_total_year,
             'poa_difference_abs_total_year': abs(poa_difference_total_year),
-            'poa_%_difference_total_year': (poa_difference_total_year / poa_avg_pos_total_year * 100)
+            'poa_%_difference_total_year': (poa_difference_total_year / poa_avg_pos_total_year) * 100
         }
 
 if __name__ == "__main__":
-    # Site.runall()
+    x = False
+    if x:
+        Site.runall()
+    else:
+        pass
 
     sites = [
         'Site A', 'Site B', 'Site C', 'Site D', 'Site E']
