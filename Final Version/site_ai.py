@@ -15,28 +15,50 @@ class Site:
         self.tz = 'America/New_York'
 
     def import_stow_weather_data(self, file_path):
+        # WeatherBit exports are not fully consistent across sites (imperial vs metric).
+        sw_df = pd.read_csv(file_path, parse_dates=['Timestamp (UTC)'])
+
+        if 'Wind Speed (mph)' in sw_df.columns:
+            sw_df['Wind Speed (m/s)'] = pd.to_numeric(sw_df['Wind Speed (mph)'], errors='coerce') * 0.44704
+        elif 'Wind Speed (m/s)' in sw_df.columns:
+            sw_df['Wind Speed (m/s)'] = pd.to_numeric(sw_df['Wind Speed (m/s)'], errors='coerce')
+        else:
+            raise ValueError(f"Missing wind speed column in {file_path}")
+
+        if 'Wind Gust Speed (mph)' in sw_df.columns:
+            sw_df['Wind Gust Speed (m/s)'] = pd.to_numeric(sw_df['Wind Gust Speed (mph)'], errors='coerce') * 0.44704
+        elif 'Wind Gust Speed (m/s)' in sw_df.columns:
+            sw_df['Wind Gust Speed (m/s)'] = pd.to_numeric(sw_df['Wind Gust Speed (m/s)'], errors='coerce')
+        else:
+            # Fallback if gust data is not provided.
+            sw_df['Wind Gust Speed (m/s)'] = sw_df['Wind Speed (m/s)']
+
+        if 'Snowfall Rate (in/hr)' in sw_df.columns:
+            sw_df['Snowfall Rate (mm/hr)'] = pd.to_numeric(sw_df['Snowfall Rate (in/hr)'], errors='coerce') * 25.4
+        elif 'Snowfall Rate (mm/hr)' in sw_df.columns:
+            sw_df['Snowfall Rate (mm/hr)'] = pd.to_numeric(sw_df['Snowfall Rate (mm/hr)'], errors='coerce')
+        else:
+            sw_df['Snowfall Rate (mm/hr)'] = 0.0
+
+        required_columns = ['Timestamp (UTC)', 'Wind Dir (Deg)', 'Weather Code']
+        missing_columns = [c for c in required_columns if c not in sw_df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns in {file_path}: {missing_columns}")
+
+        sw_df['Wind Dir (Deg)'] = pd.to_numeric(sw_df['Wind Dir (Deg)'], errors='coerce')
+        sw_df['Weather Code'] = pd.to_numeric(sw_df['Weather Code'], errors='coerce')
+
         self.selected_columns = [
             'Timestamp (UTC)',
-            'Wind Speed (mph)',
-            'Wind Gust Speed (mph)',
+            'Wind Speed (m/s)',
+            'Wind Gust Speed (m/s)',
             'Wind Dir (Deg)',
-            'Snowfall Rate (in/hr)',
-            'Weather Code'
+            'Snowfall Rate (mm/hr)',
+            'Weather Code',
         ]
-        # Code to import weather data from a file
-        sw_df = pd.read_csv(file_path
-                            , usecols=self.selected_columns
-                            , parse_dates=['Timestamp (UTC)'])
-        sw_df.set_index('Timestamp (UTC)', inplace=True)
-        sw_df.rename(columns={
-            'Wind Speed (mph)': 'Wind Speed (m/s)',
-            'Wind Gust Speed (mph)': 'Wind Gust Speed (m/s)',
-            'Snowfall Rate (in/hr)': 'Snowfall Rate (mm/hr)'
-        }, inplace=True)
 
-        sw_df['Wind Speed (m/s)'] = sw_df['Wind Speed (m/s)'] * 0.44704
-        sw_df['Wind Gust Speed (m/s)'] = sw_df['Wind Gust Speed (m/s)'] * 0.44704
-        sw_df['Snowfall Rate (mm/hr)'] = sw_df['Snowfall Rate (mm/hr)'] * 25.4
+        sw_df = sw_df[self.selected_columns].copy()
+        sw_df.set_index('Timestamp (UTC)', inplace=True)
         self.sw_df = sw_df
 
     def build_array(self, param_dict):
@@ -97,94 +119,64 @@ class Site:
         return ideal_angle['tracker_theta']
     
     def run_stow_conditions(self, df, relaxation_factor, max_angle):
-        # Code to run stow conditions based on weather data
-        for i in range(len(df)-1):
-            idx = df.index[i]
-            next_idx = df.index[i+1]
-            row = df.loc[idx]
-            if isinstance(row, pd.DataFrame):
-                row = row.iloc[0]
-            # Stow Conditions
-            # Storm
-            if row['Wind Speed (m/s)'] > 25 or\
-                row['Weather Code'] in [200,201,202,230,231,232,233,511]:
-            # ['Thunderstorm with light rain','Thunderstorm with rain','Thunderstorm with heavy rain','Thunderstorm with light drizzle',\
-            # 'Thunderstorm with drizzle','Thunderstorm with heavy drizzle','Thunderstorm with Hail']:
-                if pd.isna(df.at[idx, 'trigger']):
-                    df.at[idx, 'trigger'] = "Storm"
+        # Use NumPy-backed arrays to avoid slow per-row pandas indexing on large files.
+        wind_speed = df['Wind Speed (m/s)'].to_numpy()
+        wind_gust = df['Wind Gust Speed (m/s)'].to_numpy()
+        wind_dir = df['Wind Dir (Deg)'].to_numpy()
+        snowfall = df['Snowfall Rate (mm/hr)'].to_numpy()
+        weather_code = df['Weather Code'].to_numpy()
+        time_delta_mins = (df['time_delta'].dt.total_seconds() / 60).to_numpy()
+        trigger = df['trigger'].to_numpy()
+        stow_angle = df['stow_angle'].to_numpy()
+        stow_setpoint = df['stow_setpoint'].to_numpy()
+        tracker_theta = df['tracker_theta'].to_numpy()
+
+        storm_codes = {200, 201, 202, 230, 231, 232, 233, 511}
+        snow_codes = {600, 601, 602, 610, 611, 612, 621, 622, 623}
+        max_angle_change = 30
+
+        for i in range(len(df) - 1):
+            next_i = i + 1
+            has_trigger = not pd.isna(trigger[i])
+            wc = weather_code[i]
+
+            if wind_speed[i] > 25 or wc in storm_codes:
+                if not has_trigger:
+                    trigger[i] = 'Storm'
                     relaxation_factor = 40
-                    if row['stow_angle'] < 0:
-                        df.at[next_idx, 'stow_setpoint'] = - max_angle
-                    else:
-                        df.at[next_idx, 'stow_setpoint'] = max_angle
-                else:
-                    pass
-                    # already triggered, but I think I want to track that
-            # Wind
-            elif row['Wind Speed (m/s)'] > 11 or row['Wind Gust Speed (m/s)'] > 16:
-                if pd.isna(df.at[idx, 'trigger']):
-                    df.at[idx, 'trigger'] = "Wind"
+                    stow_setpoint[next_i] = -max_angle if stow_angle[i] < 0 else max_angle
+            elif wind_speed[i] > 11 or wind_gust[i] > 16:
+                if not has_trigger:
+                    trigger[i] = 'Wind'
                     relaxation_factor = 20
-                    if row['stow_angle'] < 0:
-                        df.at[next_idx, 'stow_setpoint'] = -40
-                    else:
-                        df.at[next_idx, 'stow_setpoint'] = 40
-                else:
-                    pass
-                    # already triggered, but I think I want to track that
-            # Snow
-            elif row['Snowfall Rate (mm/hr)'] > 0 or \
-            row['Weather Code'] in [600,601,602,610,611,612,621,622,623]:
-            # ['Freezing Rain','Snow','Heavy Snow','Mix snow/rain','Sleet','Snow Shower','Heavy snow shower','Flurries']:
-                if pd.isna(df.at[idx, 'trigger']):
-                    df.at[idx, 'trigger'] = "Snow"
+                    stow_setpoint[next_i] = -40 if stow_angle[i] < 0 else 40
+            elif snowfall[i] > 0 or wc in snow_codes:
+                if not has_trigger:
+                    trigger[i] = 'Snow'
                     relaxation_factor = 30
-                    # Determine Wind Direction
-                    # If Wind from East, Stow to East
-                    if row['Wind Dir (Deg)'] <=180:
-                        df.at[next_idx, 'stow_setpoint'] = - max_angle
-                    # If Wind from West, Stow to West  
-                    else:
-                        df.at[next_idx, 'stow_setpoint'] = max_angle
-                else:
-                    pass
-                    # already triggered, but I think I want to track that
-            # If no active trigger, check if relaxation factor is > 0
+                    stow_setpoint[next_i] = -max_angle if wind_dir[i] <= 180 else max_angle
             elif relaxation_factor > 0:
-                df.at[idx, 'trigger'] = "Relaxing"
-                time_delta = df.at[idx, 'time_delta'].total_seconds() / 60
-                relaxation_factor -= time_delta
+                trigger[i] = 'Relaxing'
+                relaxation_factor -= time_delta_mins[i]
                 if relaxation_factor > 0:
-                    df.at[next_idx, 'stow_setpoint'] = df.at[idx, 'stow_setpoint']
+                    stow_setpoint[next_i] = stow_setpoint[i]
                 else:
-                    df.at[next_idx, 'stow_setpoint'] = df.at[next_idx, 'tracker_theta']
+                    stow_setpoint[next_i] = tracker_theta[next_i]
             else:
-                df.at[next_idx, 'stow_setpoint'] = df.at[next_idx, 'tracker_theta']
-                df.at[idx, 'trigger'] = "Ideal Tracking"
-            # Determine delta between actual angle(idx) and setpoint angle (idx+1)
-            stow_setpoint_val = df['stow_setpoint'].loc[next_idx]
-            if isinstance(stow_setpoint_val, pd.Series):
-                setpoint_angle = stow_setpoint_val.iloc[0]
-            else:
-                setpoint_angle = stow_setpoint_val
-            
-            stow_angle_val = df['stow_angle'].loc[idx]
-            if isinstance(stow_angle_val, pd.Series):
-                current_angle = stow_angle_val.iloc[0]
-            else:
-                current_angle = stow_angle_val
-            
+                stow_setpoint[next_i] = tracker_theta[next_i]
+                trigger[i] = 'Ideal Tracking'
+
+            setpoint_angle = stow_setpoint[next_i]
+            current_angle = stow_angle[i]
             angle_delta = setpoint_angle - current_angle
-            # 20 degrees per time step (15 minutes)
-            max_angle_change = 30
+
             if abs(angle_delta) > max_angle_change:
-                # Update stow angle for next time step
-                if (setpoint_angle < current_angle):
-                    df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] - max_angle_change).clip(-max_angle, max_angle)
+                if setpoint_angle < current_angle:
+                    stow_angle[next_i] = np.clip(current_angle - max_angle_change, -max_angle, max_angle)
                 else:
-                    df.at[next_idx, 'stow_angle'] = (df.at[idx, 'stow_angle'] + max_angle_change).clip(-max_angle, max_angle)
+                    stow_angle[next_i] = np.clip(current_angle + max_angle_change, -max_angle, max_angle)
             else:
-                df.at[next_idx, 'stow_angle'] = df.at[next_idx, 'stow_setpoint']
+                stow_angle[next_i] = setpoint_angle
 
         return df
 
@@ -287,9 +279,10 @@ class Site:
 
     @staticmethod
     def runall():
-        weather_dir = 'Final Version/WeatherBit Data'
-        nexamp_dir = 'Final Version/Nexamp Data'
-        output_dir = 'Final Version/Output'
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        weather_dir = os.path.join(base_dir, 'WeatherBit Data')
+        nexamp_dir = os.path.join(base_dir, 'Nexamp Data')
+        output_dir = os.path.join(base_dir, 'Output')
         os.makedirs(output_dir, exist_ok=True)
 
         base_params = {
@@ -310,9 +303,12 @@ class Site:
             'site_a': 'Site A.csv',
             'site_b': 'Site B.csv',
             'site_c': 'Site C.csv',
+            'site_d': 'Site D.csv',
+            'site_e': 'Site E.csv',
         }
 
         for site_key, csv_name in site_files.items():
+            print(site_key)
             weather_path = os.path.join(weather_dir, csv_name)
             nexamp_path = os.path.join(nexamp_dir, csv_name)
 
