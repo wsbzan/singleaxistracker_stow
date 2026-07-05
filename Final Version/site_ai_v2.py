@@ -467,9 +467,23 @@ class Site:
 
         poa_stow.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_poa_stow.csv')
         poa_avg_pos.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_poa_avg_pos.csv')
-        poa_stow_total_year = poa_stow.sum(min_count=1)
-        poa_avg_pos_total_year = poa_avg_pos.sum(min_count=1)
+        # Compare only on overlapping valid samples to avoid bias from data gaps.
+        poa_pair = pd.DataFrame({
+            'poa_stow': poa_stow,
+            'poa_avg_pos': poa_avg_pos,
+        }).dropna()
+
+        poa_stow_total_year = poa_pair['poa_stow'].sum(min_count=1)
+        poa_avg_pos_total_year = poa_pair['poa_avg_pos'].sum(min_count=1)
         poa_difference_total_year = poa_stow_total_year - poa_avg_pos_total_year
+
+        stow_valid_samples = int(poa_stow.notna().sum())
+        avg_valid_samples = int(poa_avg_pos.notna().sum())
+        overlap_valid_samples = int(len(poa_pair))
+        overlap_days = int(poa_pair.index.normalize().nunique()) if overlap_valid_samples else 0
+
+        stow_days = int(poa_stow.dropna().index.normalize().nunique())
+        avg_days = int(poa_avg_pos.dropna().index.normalize().nunique())
 
         return {
             'mae_active_stow': mae_value_as,
@@ -477,8 +491,14 @@ class Site:
             'poa_stow_total_year': poa_stow_total_year,
             'poa_avg_pos_total_year': poa_avg_pos_total_year,
             'poa_difference_total_year': poa_difference_total_year,
-            'poa_difference_abs_total_year': abs(poa_difference_total_year),
-            'poa_%_difference_total_year': (poa_difference_total_year / poa_avg_pos_total_year) * 100
+            # 'poa_difference_abs_total_year': abs(poa_difference_total_year),
+            'poa_%_difference_total_year': (poa_difference_total_year / poa_avg_pos_total_year) * 100,
+            # 'poa_stow_valid_samples': stow_valid_samples,
+            # 'poa_avg_pos_valid_samples': avg_valid_samples,
+            # 'poa_overlap_valid_samples': overlap_valid_samples,
+            # 'poa_stow_days_with_data': stow_days,
+            # 'poa_avg_pos_days_with_data': avg_days,
+            # 'poa_overlap_days_with_data': overlap_days,
         }
 
 if __name__ == "__main__":
