@@ -387,6 +387,8 @@ class Site:
     def stow_metrics(fp, weather_fp, year, loc, axis_tilt=0, axis_azimuth=180):
         df = pd.read_csv(fp, parse_dates=['timestamp']).set_index('timestamp')
         df.index = pd.to_datetime(df.index, errors='coerce', utc=True)
+        # Convert to local time
+        df.index = df.index.tz_convert(loc.tz)
         df = df[df.index.notna()]
         # Restrict metrics calculations to the 2024 calendar year.
         df = df[df.index.year == year]
