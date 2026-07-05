@@ -438,7 +438,7 @@ class Site:
         #     solar_zenith=solar_position['apparent_zenith'],
         #     solar_azimuth=solar_position['azimuth']
         # )
-
+        df.to_csv(f'Final Version/{loc.name.lower().replace(" ", "_")}_combined_eval.csv')
         poa_stow = pv.irradiance.get_total_irradiance(
             surface_tilt=stow_surface['surface_tilt'],
             surface_azimuth=stow_surface['surface_azimuth'],
