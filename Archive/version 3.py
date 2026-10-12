@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import pvlib
 import matplotlib.pyplot as plt
-from site_info import site_info as si
+from Archive.site_info import site_info as si
 
 def build_site(
     axis_tilt,

@@ -9,6 +9,24 @@ from matplotlib.widgets import RangeSlider
 from datetime import time
 from sites import sites as SITE_CONFIGS
 
+# Default stow-algorithm feature toggles. Override per-run by passing a partial
+# dict (merged over these defaults) to process_stow_conditions/runall/run_initial_site.
+DEFAULT_STOW_TOGGLES = {
+    'enable_storm': True,
+    'enable_wind': True,
+    'enable_snow': True,
+    # zero_crossing=True: stay on the current side of flat (0 deg), never sweep through it.
+    # zero_crossing=False: ignore the current side and point the backside into the wind instead.
+    'storm_zero_crossing': False,
+    'wind_zero_crossing': False,
+    'snow_zero_crossing': False,
+    # Preemptive triggers look ahead `preempt_steps` timestamps for a storm/snow
+    # condition and, if found, stow early under a 'Preemptive <Condition>' label.
+    'preempt_storm': False,
+    'preempt_snow': False,
+    'preempt_steps': 2,
+}
+
 class Site:
     def __init__ (self, name):
         self.name = name
@@ -119,7 +137,23 @@ class Site:
         ideal_angle['tracker_theta'] = ideal_angle['tracker_theta'].ffill()
         return ideal_angle['tracker_theta']
     
-    def run_stow_conditions(self, df, relaxation_factor, max_angle):
+    @staticmethod
+    def _directional_setpoint(magnitude, zero_crossing, current_angle, wind_dir_deg, axis_azimuth):
+        # Option a: stay on the current side of flat (0 deg) so the tracker never crosses through it.
+        if zero_crossing:
+            return -magnitude if current_angle < 0 else magnitude
+        # Option b: backside into the wind. With axis_tilt=0, +theta faces (axis_azimuth+90)
+        # and -theta faces (axis_azimuth-90); the front should face downwind (wind_dir+180),
+        # so pick +theta when downwind falls on the (axis_azimuth+90) half of the circle.
+        offset = (wind_dir_deg + 180 - axis_azimuth) % 360
+        return magnitude if offset < 180 else -magnitude
+
+    def run_stow_conditions(
+        self, df, relaxation_factor, max_angle,
+        enable_storm=True, enable_wind=True, enable_snow=True,
+        storm_zero_crossing=True, wind_zero_crossing=True, snow_zero_crossing=False,
+        preempt_storm=False, preempt_snow=False, preempt_steps=2
+    ):
         # Use NumPy-backed arrays to avoid slow per-row pandas indexing on large files.
         wind_speed = df['Wind Speed (m/s)'].to_numpy()
         wind_gust = df['Wind Gust Speed (m/s)'].to_numpy()
@@ -135,37 +169,77 @@ class Site:
         storm_codes = {200, 201, 202, 230, 231, 232, 233, 511}
         snow_codes = {600, 601, 602, 610, 611, 612, 621, 622, 623}
         max_angle_change = 30
+        wind_magnitude = 40
+        axis_azimuth = self.mount.axis_azimuth
+
+        def storm_condition(idx):
+            return wind_speed[idx] > 25 or weather_code[idx] in storm_codes
+
+        def snow_condition(idx):
+            return snowfall[idx] > 0 or weather_code[idx] in snow_codes
 
         for i in range(len(df) - 1):
             next_i = i + 1
             has_trigger = not pd.isna(trigger[i])
-            wc = weather_code[i]
 
-            if wind_speed[i] > 25 or wc in storm_codes:
+            storm_now = enable_storm and storm_condition(i)
+            wind_now = enable_wind and (wind_speed[i] > 11 or wind_gust[i] > 16)
+            snow_now = enable_snow and snow_condition(i)
+
+            if storm_now:
                 if not has_trigger:
                     trigger[i] = 'Storm'
                     relaxation_factor = 40
-                    stow_setpoint[next_i] = -max_angle if stow_angle[i] < 0 else max_angle
-            elif wind_speed[i] > 11 or wind_gust[i] > 16:
+                    stow_setpoint[next_i] = self._directional_setpoint(
+                        max_angle, storm_zero_crossing, stow_angle[i], wind_dir[i], axis_azimuth)
+            elif wind_now:
                 if not has_trigger:
                     trigger[i] = 'Wind'
                     relaxation_factor = 20
-                    stow_setpoint[next_i] = -40 if stow_angle[i] < 0 else 40
-            elif snowfall[i] > 0 or wc in snow_codes:
+                    stow_setpoint[next_i] = self._directional_setpoint(
+                        wind_magnitude, wind_zero_crossing, stow_angle[i], wind_dir[i], axis_azimuth)
+            elif snow_now:
                 if not has_trigger:
                     trigger[i] = 'Snow'
                     relaxation_factor = 30
-                    stow_setpoint[next_i] = -max_angle if wind_dir[i] <= 180 else max_angle
-            elif relaxation_factor > 0:
-                trigger[i] = 'Relaxing'
-                relaxation_factor -= time_delta_mins[i]
-                if relaxation_factor > 0:
-                    stow_setpoint[next_i] = stow_setpoint[i]
-                else:
-                    stow_setpoint[next_i] = tracker_theta[next_i]
+                    stow_setpoint[next_i] = self._directional_setpoint(
+                        max_angle, snow_zero_crossing, stow_angle[i], wind_dir[i], axis_azimuth)
             else:
-                stow_setpoint[next_i] = tracker_theta[next_i]
-                trigger[i] = 'Ideal Tracking'
+                # Priority #4: only consider a preemptive stow once no real trigger fired this step.
+                preemptive_fired = False
+                if preempt_storm and enable_storm:
+                    for offset in range(1, preempt_steps + 1):
+                        j = i + offset
+                        if j < len(df) and storm_condition(j):
+                            if not has_trigger:
+                                trigger[i] = 'Preemptive Storm'
+                                relaxation_factor = 40
+                                stow_setpoint[next_i] = self._directional_setpoint(
+                                    max_angle, storm_zero_crossing, stow_angle[i], wind_dir[j], axis_azimuth)
+                            preemptive_fired = True
+                            break
+                if not preemptive_fired and preempt_snow and enable_snow:
+                    for offset in range(1, preempt_steps + 1):
+                        j = i + offset
+                        if j < len(df) and snow_condition(j):
+                            if not has_trigger:
+                                trigger[i] = 'Preemptive Snow'
+                                relaxation_factor = 30
+                                stow_setpoint[next_i] = self._directional_setpoint(
+                                    max_angle, snow_zero_crossing, stow_angle[i], wind_dir[j], axis_azimuth)
+                            preemptive_fired = True
+                            break
+                if not preemptive_fired:
+                    if relaxation_factor > 0:
+                        trigger[i] = 'Relaxing'
+                        relaxation_factor -= time_delta_mins[i]
+                        if relaxation_factor > 0:
+                            stow_setpoint[next_i] = stow_setpoint[i]
+                        else:
+                            stow_setpoint[next_i] = tracker_theta[next_i]
+                    else:
+                        stow_setpoint[next_i] = tracker_theta[next_i]
+                        trigger[i] = 'Ideal Tracking'
 
             setpoint_angle = stow_setpoint[next_i]
             current_angle = stow_angle[i]
@@ -181,7 +255,7 @@ class Site:
 
         return df
 
-    def process_stow_conditions(self):
+    def process_stow_conditions(self, stow_toggles=None):
         # Code to run stow conditions based on weather data
         '''
         Adjusts tracker angles based on stow conditions
@@ -195,12 +269,13 @@ class Site:
         )
         df['td'] = pd.to_datetime(df.index)
         df['time_delta'] = (df['td']-df['td'].shift())
-        relaxation_factor = 0; max_angle = 52
+        relaxation_factor = 0; max_angle = self.mount.max_angle
         # Set Initial Tracker Angle and Setpoint
         df.at[df.index[0], 'stow_setpoint'] = df.at[df.index[0], 'tracker_theta']
         df.at[df.index[0], 'stow_angle'] = df.at[df.index[0], 'tracker_theta']
 
-        stow_conditions = self.run_stow_conditions(df, relaxation_factor, max_angle)
+        toggles = {**DEFAULT_STOW_TOGGLES, **(stow_toggles or {})}
+        stow_conditions = self.run_stow_conditions(df, relaxation_factor, max_angle, **toggles)
         return stow_conditions
     
     def save_results(self, output_path):
@@ -276,7 +351,7 @@ class Site:
         plt.close(fig)
 
     @staticmethod
-    def runall():
+    def runall(stow_toggles=None):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         weather_dir = os.path.join(base_dir, 'WeatherBit Data')
         nexamp_dir = os.path.join(base_dir, 'Nexamp Data')
@@ -328,7 +403,7 @@ class Site:
             site_obj.build_array(params)
             site_obj.import_stow_weather_data(weather_path)
 
-            stow_conditions = site_obj.process_stow_conditions()
+            stow_conditions = site_obj.process_stow_conditions(stow_toggles)
             stow_out = os.path.join(output_dir, f'{site_key}_stow_conditions.csv')
             stow_conditions.to_csv(stow_out)
 
@@ -340,6 +415,40 @@ class Site:
             site_obj.plot_combined_scatter(combined, scatter_out)
 
             print(f'Finished {site_key}: {combined_out}, {scatter_out}')
+
+    @staticmethod
+    def run_initial_site(site_key='site_example', csv_name='example site dataset.csv', stow_toggles=None, output_name=None):
+        '''
+        Runs the stow-condition algorithm on the initial/example dataset
+        (brought over from version 4.py / site_info.py) instead of a real
+        validation site. There is no real tracker ground truth for this
+        dataset, so only the stow-conditions timeline is produced.
+
+        output_name: filename prefix for the output CSV (defaults to site_key).
+        Pass a distinct tag per stow_toggles combination to keep multiple runs'
+        outputs side-by-side for later plotting/metrics comparison.
+        '''
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        weather_path = os.path.join(base_dir, csv_name)
+        output_dir = os.path.join(base_dir, 'Output')
+        os.makedirs(output_dir, exist_ok=True)
+
+        if not os.path.exists(weather_path):
+            print(f'Skipping {site_key}: missing data file {weather_path}')
+            return None
+
+        params = SITE_CONFIGS[site_key]
+        site_obj = Site(site_key.replace('_', ' ').title())
+        site_obj.build_array(params)
+        site_obj.import_stow_weather_data(weather_path)
+
+        stow_conditions = site_obj.process_stow_conditions(stow_toggles)
+        stow_out = os.path.join(output_dir, f'{output_name or site_key}_stow_conditions.csv')
+        stow_conditions.to_csv(stow_out)
+
+        print(f'Finished {site_key}: {stow_out}')
+        print(stow_conditions['trigger'].value_counts())
+        return stow_conditions
 
     @staticmethod
     def mae(fp):
@@ -502,47 +611,109 @@ class Site:
         }
 
 if __name__ == "__main__":
-    x = False
-    if x:
-        Site.runall()
-    else:
-        pass
+    # Toggle between the initial/example dataset (synthetic, no real tracker
+    # ground truth) and the real-world validation sites (Site A-E).
+    RUN_MODE = 'initial'  # 'initial' or 'validation'
 
-    sites = [
-        'Site A', 'Site B', 'Site C', 'Site D', 'Site E']
-    site_metrics = {}
+    # See DEFAULT_STOW_TOGGLES for the full set of keys and their meaning.
+    ST_No_Zero_No_Preemptive = {
+        # No zero-crossing and no preemptive stow toggles for the ST_No_Zero_No_Preemptive configuration.
+        **DEFAULT_STOW_TOGGLES
+    }
 
-    for site in sites:
-        if site == 'Site A':
-            year = 2023
+    ST_Zero_Preemptive = {
+        # Zero-crossing and preemptive stow toggles for the ST_Zero_Preemptive configuration.
+        'enable_storm': True,
+        'enable_wind': True,
+        'enable_snow': True,
+        'storm_zero_crossing': True,
+        'wind_zero_crossing': True,
+        'snow_zero_crossing': False,
+        'preempt_storm': True,
+        'preempt_snow': True,
+        'preempt_steps': 2,
+    }
+
+    ST_Zero_No_Preemptive = {
+        # Zero-crossing and no preemptive stow toggles
+        'enable_storm': True,
+        'enable_wind': True,
+        'enable_snow': True,
+        'storm_zero_crossing': True,
+        'wind_zero_crossing': True,
+        'snow_zero_crossing': False,
+        'preempt_storm': False,
+        'preempt_snow': False,
+        'preempt_steps': 2,
+    }
+
+    ST_No_Zero_Preemptive = {
+        # No zero-crossing and preemptive stow toggles
+        'enable_storm': True,
+        'enable_wind': True,
+        'enable_snow': True,
+        'storm_zero_crossing': False,
+        'wind_zero_crossing': False,
+        'snow_zero_crossing': False,
+        'preempt_storm': True,
+        'preempt_snow': True,
+        'preempt_steps': 2,
+    }
+
+    if RUN_MODE == 'initial':
+        # Give each toggle combination you want to compare its own output_name
+        # (e.g. 'site_example_baseline', 'site_example_preemptive') so the CSVs
+        # don't overwrite each other.
+        Site.run_initial_site(stow_toggles=ST_No_Zero_No_Preemptive, output_name='site_example_no_zero_no_preemptive_stow')
+        Site.run_initial_site(stow_toggles=ST_Zero_Preemptive, output_name='site_example_zero_preemptive')
+        Site.run_initial_site(stow_toggles=ST_Zero_No_Preemptive, output_name='site_example_zero_no_preemptive')
+        Site.run_initial_site(stow_toggles=ST_No_Zero_Preemptive, output_name='site_example_no_zero_preemptive')
+
+    elif RUN_MODE == 'validation':
+        x = False
+        if x:
+            Site.runall(stow_toggles=STOW_TOGGLES)
         else:
-            year = 2024
+            pass
 
-        location = pv.location.Location(
-            latitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['latitude'],
-            longitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['longitude'],
-            tz=SITE_CONFIGS[site.lower().replace(" ", "_")]['tz'],
-            altitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['altitude'],
-            name=site
-        )
-        
-        raw_metrics = Site.stow_metrics(
-            fp=f'Final Version/Output/{site.lower().replace(" ", "_")}_combined.csv',
-            weather_fp=f'Final Version/WeatherBit Data/{site}.csv',
-            year = year,
-            loc = location
-        )
+        sites = [
+            'Site A', 'Site B', 'Site C', 'Site D', 'Site E']
+        site_metrics = {}
 
-        rounded_metrics = {
-            key: (round(float(value), 3) if pd.notna(value) else np.nan)
-            for key, value in raw_metrics.items()
-        }
-        site_metrics[site] = rounded_metrics
+        for site in sites:
+            if site == 'Site A':
+                year = 2023
+            else:
+                year = 2024
 
-        print(site)
-        print(rounded_metrics)
+            location = pv.location.Location(
+                latitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['latitude'],
+                longitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['longitude'],
+                tz=SITE_CONFIGS[site.lower().replace(" ", "_")]['tz'],
+                altitude=SITE_CONFIGS[site.lower().replace(" ", "_")]['altitude'],
+                name=site
+            )
+            
+            raw_metrics = Site.stow_metrics(
+                fp=f'Final Version/Output/{site.lower().replace(" ", "_")}_combined.csv',
+                weather_fp=f'Final Version/WeatherBit Data/{site}.csv',
+                year = year,
+                loc = location
+            )
 
-    metrics_table = pd.DataFrame.from_dict(site_metrics, orient='index')
-    metrics_table.index.name = 'site'
-    print('\nStow Metrics Summary (rounded to 3 decimals):')
-    print(metrics_table.to_string(float_format=lambda x: f'{x:.3f}', na_rep='NaN'))
+            rounded_metrics = {
+                key: (round(float(value), 3) if pd.notna(value) else np.nan)
+                for key, value in raw_metrics.items()
+            }
+            site_metrics[site] = rounded_metrics
+
+            print(site)
+            print(rounded_metrics)
+
+        metrics_table = pd.DataFrame.from_dict(site_metrics, orient='index')
+        metrics_table.index.name = 'site'
+        print('\nStow Metrics Summary (rounded to 3 decimals):')
+        print(metrics_table.to_string(float_format=lambda x: f'{x:.3f}', na_rep='NaN'))
+
+    else:
+        raise ValueError(f"Unknown RUN_MODE: {RUN_MODE!r}. Expected 'initial' or 'validation'.")

@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 import pvlib
 import matplotlib.pyplot as plt
-from site_info import site_info as si
-from api_calls import api_call
+from Archive.site_info import site_info as si
+from Archive.api_calls import api_call
 import os
 
 class SolarTrackerSite:
