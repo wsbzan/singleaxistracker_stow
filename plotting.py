@@ -56,7 +56,7 @@ colors = plt.cm.Set3(np.linspace(0, 1, len(unique_triggers)))
 colors = ['gray', 'blue', 'red', 'green', 'cyan', 'magenta'][:len(unique_triggers)]  # Use a predefined color list
 trigger_colors = {trigger: colors[i] for i, trigger in enumerate(unique_triggers)}
 
-fig, ax = plt.subplots(figsize=(12, 6))
+fig, ax = plt.subplots(figsize=(10, 5))
 # plt.figure(figsize=(12, 6))
 
 # Add background colored regions for each zone/trigger
@@ -113,4 +113,4 @@ fig.tight_layout()
 ax2.set_ylabel('Wind Gust Speed (m/s)', color='orange')
 ax3.set_ylabel('Snowfall Rate (mm/hr)', color='purple')
 ax4.set_ylabel('Wind Direction (Deg)', color='green')
-plt.savefig('stow_angle_over_time.png', dpi=150)
+plt.savefig('stow_angle_over_time.png', dpi=145, bbox_inches='tight')
