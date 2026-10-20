@@ -75,6 +75,10 @@ class Site:
             'Weather Code',
         ]
 
+        # Keep the full export (GHI/DNI/Temperature/etc.) around for later joins, separate from
+        # the trimmed sw_df used by the stow-condition trigger logic.
+        self.weather_df = sw_df.set_index('Timestamp (UTC)')
+
         sw_df = sw_df[self.selected_columns].copy()
         sw_df.set_index('Timestamp (UTC)', inplace=True)
         self.sw_df = sw_df
@@ -443,6 +447,15 @@ class Site:
         site_obj.import_stow_weather_data(weather_path)
 
         stow_conditions = site_obj.process_stow_conditions(stow_toggles)
+        # Index is UTC (naive, per import_stow_weather_data); add a local-time column for readability.
+        idx_utc = pd.to_datetime(stow_conditions.index, errors='coerce', utc=True)
+        stow_conditions.insert(0, 'timestamp_local', idx_utc.tz_convert(site_obj.tz).tz_localize(None))
+
+        # Bring in the rest of the weatherbit columns (GHI, DNI, Temperature, etc.) that
+        # were dropped from sw_df, so the export has everything plotting needs.
+        extra_cols = [c for c in site_obj.weather_df.columns if c not in stow_conditions.columns]
+        stow_conditions = stow_conditions.join(site_obj.weather_df[extra_cols], how='left')
+
         stow_out = os.path.join(output_dir, f'{output_name or site_key}_stow_conditions.csv')
         stow_conditions.to_csv(stow_out)
 
